@@ -1,0 +1,29 @@
+name: kubernetes
+llm_instructions: |
+  You have access to a Kubernetes cluster via kubectl.
+  Use these tools to inspect resources, check pod status, read logs, and get events.
+  Always specify namespace when you know it. Use "all" for --all-namespaces queries.
+
+prerequisites:
+  - command: "kubectl version --client"
+
+tools:
+  - name: kubernetes_get_resources
+    description: "Get Kubernetes resources (pods, services, deployments, etc.) in JSON format"
+    command: "kubectl get {{ kind }} -n {{ namespace }} -o json"
+    timeout: 30
+
+  - name: kubernetes_get_events
+    description: "Get Kubernetes events sorted by last timestamp"
+    command: "kubectl get events {% if namespace == 'all' %}--all-namespaces{% else %}-n {{ namespace }}{% endif %} --sort-by='.lastTimestamp'"
+    timeout: 30
+
+  - name: kubernetes_describe
+    description: "Describe a specific Kubernetes resource in detail"
+    command: "kubectl describe {{ kind }} {{ name }} -n {{ namespace }}"
+    timeout: 30
+
+  - name: kubernetes_logs
+    description: "Get logs from a pod, optionally from previous container or with tail limit"
+    command: "kubectl logs {{ pod }} -n {{ namespace }} --tail={{ tail | default(200) }}{% if previous is defined and previous %} --previous{% endif %}{% if container is defined and container %} -c {{ container }}{% endif %}"
+    timeout: 60

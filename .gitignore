@@ -1,3 +1,6 @@
 .venv/
 temp/
 src/temp/
+.ruff_cache/
+.pytest_cache/
+**/__pycache__/

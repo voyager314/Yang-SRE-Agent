@@ -1,2 +1,5 @@
+from sre_agent.cli import app
+
+
 def main() -> None:
-    print("Hello from sre-agent!")
+    app()
