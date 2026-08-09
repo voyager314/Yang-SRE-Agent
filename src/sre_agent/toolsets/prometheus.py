@@ -1,3 +1,5 @@
+"""Prometheus 即时查询与时间范围查询工具。"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -14,6 +16,8 @@ from sre_agent.core.tool import (
 
 
 class PrometheusQueryTool(Tool):
+    """调用 Prometheus HTTP API 执行即时 PromQL 查询。"""
+
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
         super().__init__(
@@ -29,6 +33,8 @@ class PrometheusQueryTool(Tool):
         )
 
     def _invoke(self, params: dict[str, Any]) -> StructuredToolResult:
+        """执行查询，并统一处理协议错误、HTTP 错误和连接错误。"""
+
         query = params["query"]
         try:
             resp = httpx.get(
@@ -64,6 +70,8 @@ class PrometheusQueryTool(Tool):
 
 
 class PrometheusRangeQueryTool(Tool):
+    """查询一段时间内的指标序列，支持简写的相对开始时间。"""
+
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
         super().__init__(
@@ -85,6 +93,9 @@ class PrometheusRangeQueryTool(Tool):
         )
 
     def _invoke(self, params: dict[str, Any]) -> StructuredToolResult:
+        """解析时间边界后调用 Prometheus ``query_range`` 接口。"""
+
+        # time 仅供范围查询使用，延迟导入避免污染模块级命名空间。
         import time
 
         query = params["query"]
@@ -92,6 +103,7 @@ class PrometheusRangeQueryTool(Tool):
         step = params["step"]
         end = params.get("end", "now")
 
+        # 起止时间共享同一个 now，避免解析期间的时间差造成边界漂移。
         now = time.time()
         start_ts = _parse_relative_time(start, now)
         end_ts = _parse_relative_time(end, now) if end != "now" else now
@@ -125,6 +137,12 @@ class PrometheusRangeQueryTool(Tool):
 
 
 def _parse_relative_time(value: str, now: float) -> float:
+    """将 ``-15m`` 等相对时间或 Unix 时间字符串转换为时间戳。
+
+    无法识别的值回退到 ``now``，保证工具返回结构化查询结果或远端错误，
+    而不是在参数预处理阶段使整个调查中断。
+    """
+
     if value.startswith("-"):
         unit_map = {"s": 1, "m": 60, "h": 3600, "d": 86400}
         unit = value[-1]
@@ -137,6 +155,8 @@ def _parse_relative_time(value: str, now: float) -> float:
 
 
 def _format_results(results: list[dict[str, Any]]) -> str:
+    """格式化 Prometheus vector/matrix，并限制每条序列为最近十个点。"""
+
     lines: list[str] = []
     for r in results:
         metric = r.get("metric", {})
@@ -146,6 +166,7 @@ def _format_results(results: list[dict[str, Any]]) -> str:
             lines.append(f"{{{label_str}}} => {val}")
         elif "values" in r:
             lines.append(f"{{{label_str}}}:")
+            # 防止高分辨率范围查询产生过长提示词，同时报告总点数供判断。
             for ts, val in r["values"][-10:]:
                 lines.append(f"  [{ts}] {val}")
             if len(r["values"]) > 10:
@@ -154,10 +175,13 @@ def _format_results(results: list[dict[str, Any]]) -> str:
 
 
 def create_prometheus_toolset(config: dict[str, Any]) -> Toolset | None:
+    """从工具集配置或环境变量创建 Prometheus 工具集。"""
+
     import os
 
     url = config.get("url") or config.get("prometheus_url") or os.environ.get("PROMETHEUS_URL")
     if not url:
+        # 保留不可用条目，让状态命令能够提示用户设置 PROMETHEUS_URL。
         return Toolset(
             name="prometheus",
             tools=[],

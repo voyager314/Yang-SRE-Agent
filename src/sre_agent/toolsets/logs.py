@@ -1,3 +1,5 @@
+"""Loki 与 Elasticsearch 日志查询工具。"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -14,6 +16,8 @@ from sre_agent.core.tool import (
 
 
 class LokiQueryTool(Tool):
+    """通过 Loki ``query_range`` API 执行 LogQL 查询。"""
+
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
         super().__init__(
@@ -33,6 +37,8 @@ class LokiQueryTool(Tool):
         )
 
     def _invoke(self, params: dict[str, Any]) -> StructuredToolResult:
+        """查询 Loki，并把多日志流合并成模型易读的逐行文本。"""
+
         query = params["query"]
         limit = params.get("limit", 100)
         try:
@@ -58,6 +64,8 @@ class LokiQueryTool(Tool):
 
 
 class ElasticsearchQueryTool(Tool):
+    """使用 Lucene query string 查询 Elasticsearch 日志索引。"""
+
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
         super().__init__(
@@ -75,9 +83,12 @@ class ElasticsearchQueryTool(Tool):
         )
 
     def _invoke(self, params: dict[str, Any]) -> StructuredToolResult:
+        """执行搜索并按时间倒序返回最近的日志记录。"""
+
         index = params["index"]
         query = params["query"]
         size = params.get("size", 50)
+        # 查询体保持简单且供应商兼容；调用方可通过 index 限定目标索引。
         body = {
             "query": {"query_string": {"query": query}},
             "size": size,
@@ -106,6 +117,8 @@ class ElasticsearchQueryTool(Tool):
 
 
 def _format_loki_results(results: list[dict[str, Any]]) -> str:
+    """保留每条日志所属的流标签，帮助模型区分服务和实例。"""
+
     lines: list[str] = []
     for stream in results:
         labels = stream.get("stream", {})
@@ -116,6 +129,8 @@ def _format_loki_results(results: list[dict[str, Any]]) -> str:
 
 
 def _format_es_results(hits: list[dict[str, Any]]) -> str:
+    """优先提取常见时间与消息字段，未知结构则完整字符串化。"""
+
     lines: list[str] = []
     for hit in hits:
         source = hit.get("_source", {})
@@ -126,11 +141,15 @@ def _format_es_results(hits: list[dict[str, Any]]) -> str:
 
 
 def create_logs_toolset(config: dict[str, Any]) -> Toolset | None:
+    """根据显式 provider、URL 特征和环境变量选择日志后端。"""
+
+    # 延迟导入使模块加载本身不依赖进程环境，方便单元测试和复用。
     import os
 
     provider = config.get("provider", "loki")
     url = config.get("url") or os.environ.get("LOKI_URL") or os.environ.get("ELASTICSEARCH_URL")
     if not url:
+        # 返回不可用工具集而非 None，使 CLI 能显示清晰的缺失配置原因。
         return Toolset(
             name="logs",
             tools=[],
@@ -139,6 +158,7 @@ def create_logs_toolset(config: dict[str, Any]) -> Toolset | None:
         )
 
     tools: list[Tool] = []
+    # provider 明确指定时优先使用；URL 特征用于零配置自动识别。
     if provider == "loki" or "loki" in url.lower():
         tools.append(LokiQueryTool(url))
         instructions = (

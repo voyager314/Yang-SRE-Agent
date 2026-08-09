@@ -1,3 +1,5 @@
+"""组装随应用发布的内置诊断工具集。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,6 +9,13 @@ from sre_agent.core.tool import Toolset
 
 
 def get_builtin_toolsets(toolset_config: dict[str, Any]) -> list[Toolset]:
+    """依据配置创建已启用的内置工具集。
+
+    Kubernetes 使用 YAML 声明，其余工具集需要根据运行配置构造 HTTP 客户端
+    或超时参数，因此由 Python 工厂函数创建。
+    """
+
+    # 延迟导入避免包初始化期间形成 toolsets -> manager -> toolsets 循环。
     from sre_agent.core.toolset_manager import ToolsetManager
     from sre_agent.toolsets.bash import create_bash_toolset
     from sre_agent.toolsets.logs import create_logs_toolset
@@ -20,6 +29,7 @@ def get_builtin_toolsets(toolset_config: dict[str, Any]) -> list[Toolset]:
         mgr = ToolsetManager()
         mgr.load_yaml_toolsets([k8s_yaml])
         for ts in mgr.toolsets:
+            # 为自动解析的 YAMLTool 注入项目统一的 Jinja 渲染函数。
             for tool in ts.tools:
                 if hasattr(tool, "_render") and tool._render is None:
                     tool._render = render_template
@@ -45,6 +55,8 @@ def get_builtin_toolsets(toolset_config: dict[str, Any]) -> list[Toolset]:
 
 
 def _is_disabled(toolset_config: dict[str, Any], name: str) -> bool:
+    """兼容字典和 Pydantic 对象两种配置表示，判断工具集是否禁用。"""
+
     entry = toolset_config.get(name)
     if entry is None:
         return False
@@ -56,6 +68,8 @@ def _is_disabled(toolset_config: dict[str, Any], name: str) -> bool:
 
 
 def _get_toolset_config(toolset_config: dict[str, Any], name: str) -> dict[str, Any] | None:
+    """提取工具集私有配置；禁用或不存在时返回 ``None``。"""
+
     entry = toolset_config.get(name)
     if entry is None:
         return None

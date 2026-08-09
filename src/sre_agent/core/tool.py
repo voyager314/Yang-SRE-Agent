@@ -1,3 +1,5 @@
+"""诊断工具、执行结果和运行前置条件的基础类型。"""
+
 from __future__ import annotations
 
 import subprocess
@@ -10,12 +12,20 @@ from pydantic import BaseModel
 
 
 class ToolResultStatus(StrEnum):
+    """工具执行结果分类，区分执行失败与成功但无数据。"""
+
     SUCCESS = "success"
     ERROR = "error"
     NO_DATA = "no_data"
 
 
 class StructuredToolResult(BaseModel):
+    """所有工具统一返回的结果信封。
+
+    ``data`` 保存正常或部分输出，``error`` 保存面向模型的错误说明，执行入口
+    会统一补充最终参数和耗时，便于追踪一次调查。
+    """
+
     status: ToolResultStatus
     data: Any | None = None
     error: str | None = None
@@ -24,17 +34,28 @@ class StructuredToolResult(BaseModel):
 
 
 class Tool(ABC):
+    """可被模型调用的工具基类。
+
+    子类只实现 :meth:`_invoke` 中的业务行为；参数转换、异常隔离、计时和输出
+    截断由公开的 :meth:`invoke` 模板方法统一处理。
+    """
+
     name: str
     description: str
     parameters: dict[str, Any]
 
     def __init__(self, name: str, description: str, parameters: dict[str, Any] | None = None):
+        """定义工具名称、模型可读描述和 JSON Schema 参数。"""
+
         self.name = name
         self.description = description
         self.parameters = parameters or {"type": "object", "properties": {}}
 
     def invoke(self, params: dict[str, Any], max_output_lines: int = 2000) -> StructuredToolResult:
+        """安全执行工具，并保证异常不会逃逸到引擎主循环。"""
+
         start = time.time()
+        # 模型有时会把数字或布尔值编码成字符串，执行前按 schema 做轻量修正。
         params = self._coerce_params(params)
         try:
             result = self._invoke(params)
@@ -44,14 +65,23 @@ class Tool(ABC):
                 error=str(e),
                 params=params,
             )
+        # 即使子类返回了结果，也以实际入口参数和端到端耗时为准。
         result.elapsed_seconds = time.time() - start
         result.params = params
         return self._truncate_if_needed(result, max_output_lines)
 
     @abstractmethod
-    def _invoke(self, params: dict[str, Any]) -> StructuredToolResult: ...
+    def _invoke(self, params: dict[str, Any]) -> StructuredToolResult:
+        """执行工具的具体业务逻辑，由子类实现。"""
+
+        ...
 
     def _coerce_params(self, params: dict[str, Any]) -> dict[str, Any]:
+        """根据 JSON Schema 转换常见的字符串参数类型。
+
+        未在 schema 中声明的参数原样保留，便于实现允许扩展字段的工具。
+        """
+
         properties = self.parameters.get("properties", {})
         coerced = {}
         for key, value in params.items():
@@ -70,6 +100,9 @@ class Tool(ABC):
     def _truncate_if_needed(
         self, result: StructuredToolResult, max_lines: int
     ) -> StructuredToolResult:
+        """截断过长的成功输出，控制传回模型的上下文占用。"""
+
+        # 错误和无数据结果结构很小，同时可能含关键诊断信息，不做截断。
         if result.status != ToolResultStatus.SUCCESS or result.data is None:
             return result
         text = str(result.data)
@@ -81,6 +114,8 @@ class Tool(ABC):
         return result
 
     def to_openai_tool(self) -> dict[str, Any]:
+        """转换为 OpenAI function calling 兼容定义。"""
+
         return {
             "type": "function",
             "function": {
@@ -92,21 +127,32 @@ class Tool(ABC):
 
 
 class PrerequisiteStatus(StrEnum):
+    """工具集运行条件的检查状态。"""
+
     SATISFIED = "satisfied"
     FAILED = "failed"
     UNCHECKED = "unchecked"
 
 
 class Prerequisite(ABC):
+    """工具集可用性检查接口。"""
+
     @abstractmethod
-    def check(self) -> tuple[PrerequisiteStatus, str]: ...
+    def check(self) -> tuple[PrerequisiteStatus, str]:
+        """返回检查状态及失败时的可读原因。"""
+
+        ...
 
 
 class EnvPrerequisite(Prerequisite):
+    """要求一个或多个环境变量已设置且非空。"""
+
     def __init__(self, env_vars: list[str]):
         self.env_vars = env_vars
 
     def check(self) -> tuple[PrerequisiteStatus, str]:
+        """一次性报告全部缺失变量，减少用户反复修正配置。"""
+
         import os
 
         missing = [v for v in self.env_vars if not os.environ.get(v)]
@@ -116,11 +162,15 @@ class EnvPrerequisite(Prerequisite):
 
 
 class CommandPrerequisite(Prerequisite):
+    """通过命令退出码判断外部程序或服务是否可用。"""
+
     def __init__(self, command: str, timeout: float = 10.0):
         self.command = command
         self.timeout = timeout
 
     def check(self) -> tuple[PrerequisiteStatus, str]:
+        """执行探测命令，并把超时及异常转换为失败状态。"""
+
         try:
             result = subprocess.run(
                 self.command,
@@ -142,6 +192,8 @@ class CommandPrerequisite(Prerequisite):
 
 
 class Toolset:
+    """按诊断领域组织工具、前置条件和模型使用说明。"""
+
     def __init__(
         self,
         name: str,
@@ -158,9 +210,13 @@ class Toolset:
 
     @property
     def is_available(self) -> bool:
+        """仅在前置条件已明确通过后返回可用。"""
+
         return self._status == PrerequisiteStatus.SATISFIED
 
     def check_prerequisites(self) -> bool:
+        """顺序检查前置条件，遇到首个失败条件立即停止。"""
+
         for prereq in self.prerequisites:
             status, message = prereq.check()
             if status == PrerequisiteStatus.FAILED:
@@ -173,6 +229,12 @@ class Toolset:
 
 
 class YAMLTool(Tool):
+    """从 YAML 声明构建的 shell 工具。
+
+    参数 schema 会从 Jinja 占位符自动推导，因此 YAML 作者无需重复维护模板
+    参数与 function schema。
+    """
+
     def __init__(
         self,
         name: str,
@@ -190,6 +252,8 @@ class YAMLTool(Tool):
         super().__init__(name=name, description=description, parameters=parameters)
 
     def _infer_parameters(self) -> dict[str, Any]:
+        """将模板变量转换为字符串参数，并识别带默认值的可选参数。"""
+
         from sre_agent.utils.jinja import extract_variables
 
         template = self.command_template or self.script_template
@@ -206,7 +270,10 @@ class YAMLTool(Tool):
         return schema
 
     def _invoke(self, params: dict[str, Any]) -> StructuredToolResult:
+        """渲染命令模板并在受限超时时间内执行。"""
+
         template = self.command_template or self.script_template
+        # 没有渲染函数时保留原模板，便于程序化构造无占位符的工具。
         rendered = self._render(template, params) if self._render else template
 
         try:

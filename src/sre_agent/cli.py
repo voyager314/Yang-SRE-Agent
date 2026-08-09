@@ -1,3 +1,5 @@
+"""基于 Typer 的命令行入口及终端流式输出逻辑。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -21,6 +23,13 @@ console = Console()
 
 
 def _build_engine(config: Config, model_override: str | None = None) -> Engine:
+    """根据配置组装模型、可用工具和执行引擎。
+
+    返回值还包含渲染后的系统提示词和工具集管理器，供不同 CLI 子命令复用
+    同一套初始化流程。
+    """
+
+    # CLI 的 --model 优先级最高，具体选择规则集中在 Config 中维护。
     model_entry = config.resolve_model(model_override)
     llm = DefaultLLM(
         model=model_entry.model,
@@ -29,6 +38,7 @@ def _build_engine(config: Config, model_override: str | None = None) -> Engine:
         api_version=model_entry.api_version,
     )
 
+    # 管理器接受普通映射或 Pydantic 配置对象，这里保留每个工具集的完整配置。
     toolset_config = {}
     for name, ts_cfg in config.toolsets.items():
         toolset_config[name] = ts_cfg
@@ -37,10 +47,12 @@ def _build_engine(config: Config, model_override: str | None = None) -> Engine:
     mgr.load_builtin_toolsets()
     mgr.check_prerequisites()
 
+    # 只把前置条件检查通过的工具暴露给模型，避免模型选择无法执行的工具。
     executor = ToolExecutor()
     for toolset in mgr.get_available_toolsets():
         executor.register_all(toolset.tools)
 
+    # 系统提示词会描述当前实际可用的能力，而不是所有理论支持的工具集。
     available_toolsets = mgr.get_available_toolsets()
     system_prompt = load_prompt("system", {"toolsets": available_toolsets})
 
@@ -53,17 +65,21 @@ def _build_engine(config: Config, model_override: str | None = None) -> Engine:
 
 
 def _render_stream(engine: Engine, messages: list[dict]) -> str:
+    """消费引擎事件，在终端显示进度并返回最终文本答案。"""
+
     answer = ""
     for event in engine.call_stream(messages):
         if event.event == StreamEventType.TOOL_START:
             name = event.data.get("name", "")
             console.print(f"  [dim]▶ calling {name}...[/dim]")
         elif event.event == StreamEventType.TOOL_RESULT:
+            # 终端只展示短预览；完整输出已经作为 tool 消息反馈给模型。
             content = event.data.get("content", "")
             status = "[OK]" if not content.startswith("ERROR") else "[FAIL]"
             preview = content[:80].replace("\n", " ")
             console.print(f"  [dim]{status} {preview}[/dim]")
         elif event.event == StreamEventType.AI_MESSAGE:
+            # 当前 CLI 不逐 token 打印中间推理文本，只在结束时渲染最终答案。
             pass
         elif event.event == StreamEventType.ANSWER_END:
             answer = event.data.get("content", "")
@@ -80,10 +96,11 @@ def ask(
         Path | None, typer.Option("--config", "-c", help="Config file path")
     ] = None,
 ):
-    """Ask a one-shot question about your infrastructure."""
+    """对基础设施问题执行一次性调查。"""
     config = Config(_config_file=str(config_file) if config_file else str(DEFAULT_CONFIG_FILE))
     engine, system_prompt, _mgr = _build_engine(config, model)
 
+    # 将原始问题嵌入调查模板，使一次性模式也遵循统一的分析指引。
     user_prompt = load_prompt("investigate", {"question": question})
     messages = [
         {"role": "system", "content": system_prompt},
@@ -109,13 +126,16 @@ def chat(
         Path | None, typer.Option("--config", "-c", help="Config file path")
     ] = None,
 ):
-    """Start an interactive multi-turn chat session."""
+    """启动保留上下文的交互式多轮会话。"""
+
+    # 交互依赖只在该子命令运行时导入，避免其他命令承担启动开销。
     from prompt_toolkit import PromptSession
     from prompt_toolkit.history import InMemoryHistory
 
     config = Config(_config_file=str(config_file) if config_file else str(DEFAULT_CONFIG_FILE))
     engine, system_prompt, _mgr = _build_engine(config, model)
 
+    # 同一列表会在每轮调用中扩展，从而向模型提供完整会话和工具调用历史。
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
     session: PromptSession = PromptSession(history=InMemoryHistory())
 
@@ -143,6 +163,7 @@ def chat(
 
         answer = _render_stream(engine, messages)
 
+        # 保存最终回答，下一轮用户可以引用此前的诊断结论。
         messages.append({"role": "assistant", "content": answer})
         console.print()
         console.print(Markdown(answer))
@@ -154,7 +175,7 @@ def toolset_list(
         Path | None, typer.Option("--config", "-c", help="Config file path")
     ] = None,
 ):
-    """List available toolsets and their status."""
+    """列出工具集、工具数量以及前置条件检查状态。"""
     config = Config(_config_file=str(config_file) if config_file else str(DEFAULT_CONFIG_FILE))
 
     toolset_config = {}
