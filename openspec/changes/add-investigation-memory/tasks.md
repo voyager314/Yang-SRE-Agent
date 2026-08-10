@@ -26,10 +26,10 @@
 
 ## 6. Engine Integration
 
-- [ ] 6.1 Add `memory_store: MemoryStore | None = None` parameter to `Engine.__init__()`
-- [ ] 6.2 Add pre-investigation recall in `Engine.call_stream()`: before the main loop, if memory_store is not None, extract user question from messages, call `memory_store.recall()`, and inject results into a shallow-copied system message (similar to `_inject_scratchpad` pattern); wrap in try/except with warning log
-- [ ] 6.3 Add post-investigation save in `Engine.call_stream()`: after the final `ANSWER_END` yield, if memory_store is not None, call `memory_store.save_investigation()` with the accumulated question, answer, scratchpad state, tool call IDs, and converged flag; wrap in try/except with warning log
-- [ ] 6.4 Implement `_inject_memories()` helper function that formats recalled `InvestigationSummary` list into a structured text block appended to system prompt (question, conclusion, root_cause, key_evidence, similarity score per entry)
+- [x] 6.1 Add `memory_store: MemoryStore | None = None` parameter to `Engine.__init__()`
+- [x] 6.2 Add pre-investigation recall in `Engine.call_stream()`: before the main loop, if memory_store is not None, extract user question from messages, call `memory_store.recall()`, and inject results into a shallow-copied system message (similar to `_inject_scratchpad` pattern); wrap in try/except with warning log
+- [x] 6.3 Add post-investigation save in `Engine.call_stream()`: after the final `ANSWER_END` yield, if memory_store is not None, call `memory_store.save_investigation()` with the accumulated question, answer, scratchpad state, tool call IDs, and converged flag; wrap in try/except with warning log
+- [x] 6.4 Implement `_inject_memories()` helper function that formats recalled `InvestigationSummary` list into a structured text block appended to system prompt (question, conclusion, root_cause, key_evidence, similarity score per entry)
 
 ## 7. CLI Wiring
 

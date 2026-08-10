@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Generator
 from typing import Any
 
@@ -10,9 +11,12 @@ from pydantic import BaseModel
 
 from sre_agent.core.context_manager import BudgetStatus, ContextManager
 from sre_agent.core.llm import LLM
+from sre_agent.core.memory_store import InvestigationSummary, MemoryStore
 from sre_agent.core.tool import Tool
 from sre_agent.core.tool_executor import ToolExecutor, _format_result_for_llm
 from sre_agent.utils.streaming import StreamEvent, StreamEventType
+
+logger = logging.getLogger(__name__)
 
 _CONVERGE_PROMPT = "上下文预算已接近上限。请立即根据现有调查结果给出最终结论，不要再调用任何工具。"
 
@@ -42,12 +46,14 @@ class Engine:
         max_steps: int = 30,
         max_output_lines: int = 2000,
         context_manager: ContextManager | None = None,
+        memory_store: MemoryStore | None = None,
     ):
         self.llm = llm
         self.tool_executor = tool_executor
         self.max_steps = max_steps
         self.max_output_lines = max_output_lines
         self.context_manager = context_manager
+        self.memory_store = memory_store
 
         # 内置工具独立保存，避免与外部工具集混合注册。
         self._builtin_tools: list[Tool] = []
@@ -89,12 +95,26 @@ class Engine:
 
         cm = self.context_manager
 
+        # ① 调查开始前：检索相关历史记忆并注入上下文。
+        user_question = _extract_user_question(messages)
+        if self.memory_store is not None:
+            try:
+                past = self.memory_store.recall(user_question)
+                if past:
+                    messages = _inject_memories(messages, past)
+            except Exception:
+                logger.warning("调查前记忆检索失败，跳过历史注入", exc_info=True)
+
         # 构建完整的工具 Schema 列表：外部工具加内置工具。
         base_tools = self.tool_executor.get_openai_tools()
         builtin_schemas = [t.to_openai_tool() for t in self._builtin_tools]
         all_tools = base_tools + builtin_schemas
 
         iteration = 0
+        answer = ""
+        converged = False
+        all_tool_call_data: list[dict[str, Any]] = []
+        evidence_call_ids: list[str] = []
 
         while iteration < self.max_steps:
             # 每轮开始前检查上下文预算。
@@ -102,7 +122,14 @@ class Engine:
                 status = cm.check_budget(messages, all_tools)
                 if status == BudgetStatus.CONVERGE:
                     # 预算接近上限时强制收敛，要求模型不调用工具直接作答。
-                    yield from self._converge(messages, iteration, cm)
+                    converge_answer = yield from self._converge(messages, iteration, cm)
+                    self._save_memory(
+                        user_question,
+                        converge_answer,
+                        all_tool_call_data,
+                        evidence_call_ids,
+                        True,
+                    )
                     return
                 elif status == BudgetStatus.COMPRESS:
                     messages[:] = cm.compress_batch(messages)
@@ -119,17 +146,28 @@ class Engine:
                 )
 
             if not response.tool_calls:
+                answer = response.content or ""
+                converged = False
                 yield StreamEvent(
                     event=StreamEventType.ANSWER_END,
                     data={
-                        "content": response.content or "",
+                        "content": answer,
                         "iterations": iteration + 1,
                         "converged": False,
                     },
                 )
+                self._save_memory(
+                    user_question, answer, all_tool_call_data, evidence_call_ids, converged
+                )
                 return
 
             for tc in response.tool_calls:
+                all_tool_call_data.append(
+                    {
+                        "name": tc["function"]["name"],
+                        "arguments": tc["function"]["arguments"],
+                    }
+                )
                 yield StreamEvent(
                     event=StreamEventType.TOOL_START,
                     data={
@@ -182,22 +220,28 @@ class Engine:
             for tr in all_results:
                 yield StreamEvent(event=StreamEventType.TOOL_RESULT, data=tr)
                 messages.append(tr)
+                # 记录被压缩并落盘的工具调用 ID，供记忆存档引用。
+                content = tr.get("content", "")
+                if isinstance(content, str) and "call_id=" in content:
+                    evidence_call_ids.append(tr.get("tool_call_id", ""))
 
             iteration += 1
 
+        answer = f"已达最大步数 ({self.max_steps})，调查未完成。"
         yield StreamEvent(
             event=StreamEventType.ANSWER_END,
             data={
-                "content": f"已达最大步数 ({self.max_steps})，调查未完成。",
+                "content": answer,
                 "iterations": iteration,
                 "converged": False,
             },
         )
+        self._save_memory(user_question, answer, all_tool_call_data, evidence_call_ids, False)
 
     def _converge(
         self, messages: list[dict[str, Any]], iteration: int, cm: ContextManager
-    ) -> Generator[StreamEvent]:
-        """注入收敛提示，要求模型不调用工具直接给出结论。"""
+    ) -> Generator[StreamEvent, None, str]:
+        """注入收敛提示，要求模型不调用工具直接给出结论。返回最终回答文本。"""
 
         content = _CONVERGE_PROMPT
         if not cm.scratchpad.is_empty():
@@ -218,6 +262,7 @@ class Engine:
                 "converged": True,
             },
         )
+        return answer
 
     def _execute_builtin(self, tc: dict[str, Any]) -> dict[str, Any]:
         """同步执行内置工具调用，返回 tool 消息字典。"""
@@ -237,6 +282,37 @@ class Engine:
             "content": _format_result_for_llm(result),
         }
 
+    def _save_memory(
+        self,
+        question: str,
+        answer: str,
+        tool_calls: list[dict[str, Any]],
+        evidence_refs: list[str],
+        converged: bool,
+    ) -> None:
+        """调查结束后触发摘要提取和存储，失败只记录警告。"""
+
+        if self.memory_store is None:
+            return
+
+        scratchpad = (
+            self.context_manager.scratchpad
+            if self.context_manager is not None
+            else __import__("sre_agent.core.scratchpad", fromlist=["Scratchpad"]).Scratchpad()
+        )
+
+        try:
+            self.memory_store.save_investigation(
+                question=question,
+                answer=answer,
+                scratchpad=scratchpad,
+                tool_calls=tool_calls,
+                evidence_refs=evidence_refs,
+                converged=converged,
+            )
+        except Exception:
+            logger.warning("调查后记忆保存失败", exc_info=True)
+
 
 def _inject_scratchpad(
     messages: list[dict[str, Any]], cm: ContextManager | None
@@ -253,6 +329,50 @@ def _inject_scratchpad(
         sys_msg["content"] = (
             sys_msg.get("content") or ""
         ) + f"\n\n## 当前调查记录\n{cm.scratchpad.to_yaml()}"
+        effective[0] = sys_msg
+    return effective
+
+
+def _extract_user_question(messages: list[dict[str, Any]]) -> str:
+    """从消息列表中提取用户的原始问题文本。"""
+
+    for msg in messages:
+        if msg.get("role") == "user":
+            return msg.get("content", "") or ""
+    return ""
+
+
+def _inject_memories(
+    messages: list[dict[str, Any]], memories: list[InvestigationSummary]
+) -> list[dict[str, Any]]:
+    """将检索到的历史调查摘要注入 system prompt 尾部。
+
+    浅拷贝消息列表，仅修改 system 消息的副本，不影响原始列表。
+    """
+
+    if not memories:
+        return messages
+
+    sections: list[str] = []
+    for i, mem in enumerate(memories, 1):
+        evidence_text = "\n".join(f"  - {e}" for e in mem.key_evidence) if mem.key_evidence else ""
+        section = f"### 调查 {i} ({mem.timestamp[:10] if mem.timestamp else '未知日期'})"
+        section += f"\n- 问题：{mem.question}"
+        section += f"\n- 结论：{mem.conclusion}"
+        if mem.root_cause:
+            section += f"\n- 根因：{mem.root_cause}"
+        if mem.resolution:
+            section += f"\n- 解决方案：{mem.resolution}"
+        if evidence_text:
+            section += f"\n- 关键证据：\n{evidence_text}"
+        sections.append(section)
+
+    memory_block = "\n\n## 以往相关调查\n\n" + "\n\n".join(sections)
+
+    effective = list(messages)
+    if effective and effective[0].get("role") == "system":
+        sys_msg = dict(effective[0])
+        sys_msg["content"] = (sys_msg.get("content") or "") + memory_block
         effective[0] = sys_msg
     return effective
 
