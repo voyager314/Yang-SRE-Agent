@@ -20,9 +20,9 @@
 
 ## 5. MemoryStore Core
 
-- [ ] 5.1 Implement `MemoryStore.__init__()` in `memory_store.py`: accept embedder, llm, memory_dir, top_k, score_threshold; initialize ChromaDB `PersistentClient` at `{memory_dir}/chroma/` and get_or_create collection `sre_investigations` with `embedding_function=None`; create JSON archive dir at `{memory_dir}/investigations/`
-- [ ] 5.2 Implement `MemoryStore.save_investigation()`: accept question, answer, scratchpad, tool_calls, evidence_refs, converged; render extraction prompt via `load_prompt`; call `llm.completion()` to extract structured summary; parse JSON response into `InvestigationSummary`; generate unique id (`inv_{timestamp}_{hash}`); embed via `embedder.embed()`; upsert into ChromaDB with embedding, document text, and metadata; write JSON file to archive dir; wrap entire flow in try/except logging warnings on failure
-- [ ] 5.3 Implement `MemoryStore.recall()`: accept query string; embed query via `embedder.embed()`; query ChromaDB collection with `n_results=top_k` and `include=["documents", "metadatas", "distances"]`; filter results by score_threshold; reconstruct and return `list[InvestigationSummary]`
+- [x] 5.1 Implement `MemoryStore.__init__()` in `memory_store.py`: accept embedder, llm, memory_dir, top_k, score_threshold; initialize ChromaDB `PersistentClient` at `{memory_dir}/chroma/` and get_or_create collection `sre_investigations` with `embedding_function=None`; create JSON archive dir at `{memory_dir}/investigations/`
+- [x] 5.2 Implement `MemoryStore.save_investigation()`: accept question, answer, scratchpad, tool_calls, evidence_refs, converged; render extraction prompt via `load_prompt`; call `llm.completion()` to extract structured summary; parse JSON response into `InvestigationSummary`; generate unique id (`inv_{timestamp}_{hash}`); embed via `embedder.embed()`; upsert into ChromaDB with embedding, document text, and metadata; write JSON file to archive dir; wrap entire flow in try/except logging warnings on failure
+- [x] 5.3 Implement `MemoryStore.recall()`: accept query string; embed query via `embedder.embed()`; query ChromaDB collection with `n_results=top_k` and `include=["documents", "metadatas", "distances"]`; filter results by score_threshold; reconstruct and return `list[InvestigationSummary]`
 
 ## 6. Engine Integration
 
