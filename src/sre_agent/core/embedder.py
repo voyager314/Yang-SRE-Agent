@@ -48,8 +48,7 @@ class SentenceTransformerEmbedder(Embedder):
         if self._model is None:
             self._load_model()
 
-        from sentence_transformers import SentenceTransformer
-
-        assert isinstance(self._model, SentenceTransformer)
-        embeddings = self._model.encode(texts, convert_to_numpy=True)
+        # _load_model 之后 _model 不可能为 None，但 mypy 需要窄化。
+        assert self._model is not None
+        embeddings = self._model.encode(texts, convert_to_numpy=True)  # type: ignore[attr-defined]
         return [vec.tolist() for vec in embeddings]

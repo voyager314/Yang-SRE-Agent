@@ -47,6 +47,6 @@
 
 ## 9. Validation
 
-- [ ] 9.1 Run `uv run pytest` and verify all tests pass
-- [ ] 9.2 Run `uv run ruff check .` and `uv run ruff format --check .` and fix any issues
-- [ ] 9.3 Run `uv run mypy src` and resolve type errors
+- [x] 9.1 Run `uv run pytest` and verify all tests pass
+- [x] 9.2 Run `uv run ruff check .` and `uv run ruff format --check .` and fix any issues
+- [x] 9.3 Run `uv run mypy src` and resolve type errors

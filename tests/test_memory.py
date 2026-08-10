@@ -12,10 +12,13 @@ from sre_agent.config import Config
 from sre_agent.core.embedder import Embedder, SentenceTransformerEmbedder
 from sre_agent.core.engine import Engine, _extract_user_question, _inject_memories
 from sre_agent.core.llm import DefaultLLM, ModelResponse
-from sre_agent.core.memory_store import InvestigationSummary, MemoryStore, _generate_investigation_id
+from sre_agent.core.memory_store import (
+    InvestigationSummary,
+    MemoryStore,
+    _generate_investigation_id,
+)
 from sre_agent.core.scratchpad import Scratchpad
 from sre_agent.core.tool_executor import ToolExecutor
-
 
 # ---------------------------------------------------------------------------
 # 8.1 Embedder 测试
@@ -54,7 +57,7 @@ class TestSentenceTransformerEmbedder:
 
     def test_lazy_loading_triggered_on_first_embed(self) -> None:
         embedder = SentenceTransformerEmbedder("test-model")
-        with patch("sre_agent.core.embedder.SentenceTransformer") as mock_cls:
+        with patch("sentence_transformers.SentenceTransformer") as mock_cls:
             import numpy as np
 
             mock_instance = MagicMock()
@@ -66,7 +69,7 @@ class TestSentenceTransformerEmbedder:
 
     def test_model_loaded_only_once(self) -> None:
         embedder = SentenceTransformerEmbedder("test-model")
-        with patch("sre_agent.core.embedder.SentenceTransformer") as mock_cls:
+        with patch("sentence_transformers.SentenceTransformer") as mock_cls:
             import numpy as np
 
             mock_instance = MagicMock()
@@ -391,10 +394,12 @@ class TestEngineMemoryIntegration:
             memory_store=mock_store,
         )
 
-        engine.call([
-            {"role": "system", "content": "sys"},
-            {"role": "user", "content": "test question"},
-        ])
+        engine.call(
+            [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "test question"},
+            ]
+        )
 
         mock_store.recall.assert_called_once_with("test question")
 
@@ -447,10 +452,12 @@ class TestEngineMemoryIntegration:
             memory_store=mock_store,
         )
 
-        engine.call([
-            {"role": "system", "content": "you are an SRE"},
-            {"role": "user", "content": "similar issue"},
-        ])
+        engine.call(
+            [
+                {"role": "system", "content": "you are an SRE"},
+                {"role": "user", "content": "similar issue"},
+            ]
+        )
 
         # LLM 调用时的 system message 应包含历史注入。
         call_messages = mock_llm.completion.call_args[0][0]

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -62,7 +62,7 @@ class InvestigationSummary(BaseModel):
 def _generate_investigation_id() -> str:
     """生成格式为 inv_{timestamp}_{short_hash} 的唯一 ID。"""
 
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     ts = now.strftime("%Y%m%d_%H%M%S")
     # 取微秒和时间戳组合后的 hash 前 8 位，确保同一秒内多次调用不冲突。
     raw = f"{now.isoformat()}-{id(now)}"
@@ -142,28 +142,29 @@ class MemoryStore:
             query_embedding = self._embedder.embed([query])[0]
 
             results = self._collection.query(
-                query_embeddings=[query_embedding],
+                query_embeddings=[query_embedding],  # type: ignore[arg-type]
                 n_results=self._top_k,
                 include=["documents", "metadatas", "distances"],
             )
 
             summaries: list[InvestigationSummary] = []
 
-            ids = results.get("ids", [[]])[0]
-            documents = results.get("documents", [[]])[0]
-            metadatas = results.get("metadatas", [[]])[0]
-            distances = results.get("distances", [[]])[0]
+            ids = (results.get("ids") or [[]])[0]
+            documents = (results.get("documents") or [[]])[0]
+            metadatas = (results.get("metadatas") or [[]])[0]
+            distances = (results.get("distances") or [[]])[0]
 
             for i, inv_id in enumerate(ids):
                 # ChromaDB 返回的 distance 越小越相似；转换为 0-1 分数便于阈值过滤。
                 distance = distances[i] if distances else 0.0
-                score = 1.0 - distance
+                score = 1.0 - float(distance)
 
                 if score < self._score_threshold:
                     continue
 
-                metadata = metadatas[i] if metadatas else {}
-                summary = self._reconstruct_summary(inv_id, documents[i], metadata, score)
+                metadata: dict[str, Any] = dict(metadatas[i]) if metadatas else {}
+                doc = documents[i] if documents else None
+                summary = self._reconstruct_summary(inv_id, doc, metadata, score)
                 summaries.append(summary)
 
             return summaries
@@ -213,13 +214,13 @@ class MemoryStore:
         if cleaned.startswith("```"):
             lines = cleaned.split("\n")
             # 去掉首行（```json 或 ```）和末行（```）。
-            lines = [l for l in lines[1:] if not l.strip().startswith("```")]
+            lines = [line for line in lines[1:] if not line.strip().startswith("```")]
             cleaned = "\n".join(lines)
 
         extracted: dict[str, Any] = json.loads(cleaned)
 
         inv_id = _generate_investigation_id()
-        now = datetime.now(tz=timezone.utc).isoformat()
+        now = datetime.now(tz=UTC).isoformat()
 
         return InvestigationSummary(
             id=inv_id,
@@ -243,9 +244,9 @@ class MemoryStore:
 
         self._collection.upsert(
             ids=[summary.id],
-            embeddings=[embedding],
+            embeddings=[embedding],  # type: ignore[arg-type]
             documents=[embedding_text],
-            metadatas=[summary.to_chroma_metadata()],  # type: ignore[list-item]
+            metadatas=[summary.to_chroma_metadata()],
         )
 
         json_path = self._archive_dir / f"{summary.id}.json"
