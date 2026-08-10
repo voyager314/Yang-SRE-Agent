@@ -54,6 +54,13 @@ class Config(BaseSettings):
     compress_threshold: float = 0.70
     converge_threshold: float = 0.90
 
+    # Memory 配置
+    memory_enabled: bool = True
+    memory_dir: str = str(DEFAULT_CONFIG_DIR / "memory")
+    embedding_model: str = "Alibaba-NLP/gte-Qwen2-1.5B-instruct"
+    memory_top_k: int = 3
+    memory_score_threshold: float = 0.6
+
     toolsets: dict[str, ToolsetConfig] = Field(default_factory=dict)
     models: dict[str, ModelEntry] = Field(default_factory=dict)
 
