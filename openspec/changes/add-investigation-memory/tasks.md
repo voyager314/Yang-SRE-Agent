@@ -38,12 +38,12 @@
 
 ## 8. Tests
 
-- [ ] 8.1 Add unit tests for `SentenceTransformerEmbedder`: test embed returns correct shape, test lazy loading behavior (mock SentenceTransformer to avoid downloading model in CI)
-- [ ] 8.2 Add unit tests for `InvestigationSummary`: test to_embedding_text composition, test to_chroma_metadata output, test unique id generation
-- [ ] 8.3 Add unit tests for `MemoryStore.save_investigation()`: mock LLM and embedder, verify ChromaDB upsert and JSON file creation, verify failure handling
-- [ ] 8.4 Add unit tests for `MemoryStore.recall()`: mock embedder and ChromaDB, verify score filtering, verify empty collection handling
-- [ ] 8.5 Add integration tests for Engine with MemoryStore: mock LLM and embedder, verify recall is called before loop and save is called after, verify memory_store=None preserves original behavior
-- [ ] 8.6 Add unit tests for Config memory fields: verify defaults, verify environment variable override, verify YAML loading
+- [x] 8.1 Add unit tests for `SentenceTransformerEmbedder`: test embed returns correct shape, test lazy loading behavior (mock SentenceTransformer to avoid downloading model in CI)
+- [x] 8.2 Add unit tests for `InvestigationSummary`: test to_embedding_text composition, test to_chroma_metadata output, test unique id generation
+- [x] 8.3 Add unit tests for `MemoryStore.save_investigation()`: mock LLM and embedder, verify ChromaDB upsert and JSON file creation, verify failure handling
+- [x] 8.4 Add unit tests for `MemoryStore.recall()`: mock embedder and ChromaDB, verify score filtering, verify empty collection handling
+- [x] 8.5 Add integration tests for Engine with MemoryStore: mock LLM and embedder, verify recall is called before loop and save is called after, verify memory_store=None preserves original behavior
+- [x] 8.6 Add unit tests for Config memory fields: verify defaults, verify environment variable override, verify YAML loading
 
 ## 9. Validation
 
