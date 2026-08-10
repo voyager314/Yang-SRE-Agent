@@ -33,8 +33,8 @@
 
 ## 7. CLI Wiring
 
-- [ ] 7.1 Update `_build_engine()` in `src/sre_agent/cli.py`: when `config.memory_enabled` is True, create `SentenceTransformerEmbedder(config.embedding_model)` and `MemoryStore(embedder, llm, ...)` with config values; wrap in try/except to gracefully disable memory if initialization fails; pass memory_store to `Engine()`
-- [ ] 7.2 Verify `ask` and `chat` commands both use the updated `_build_engine()` and thus automatically get memory recall/save behavior
+- [x] 7.1 Update `_build_engine()` in `src/sre_agent/cli.py`: when `config.memory_enabled` is True, create `SentenceTransformerEmbedder(config.embedding_model)` and `MemoryStore(embedder, llm, ...)` with config values; wrap in try/except to gracefully disable memory if initialization fails; pass memory_store to `Engine()`
+- [x] 7.2 Verify `ask` and `chat` commands both use the updated `_build_engine()` and thus automatically get memory recall/save behavior
 
 ## 8. Tests
 

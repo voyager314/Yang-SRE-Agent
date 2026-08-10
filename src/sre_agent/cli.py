@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Annotated
 
@@ -15,11 +16,14 @@ from sre_agent.core.context_manager import ContextManager
 from sre_agent.core.engine import Engine
 from sre_agent.core.evidence_store import EvidenceStore
 from sre_agent.core.llm import DefaultLLM
+from sre_agent.core.memory_store import MemoryStore
 from sre_agent.core.scratchpad import Scratchpad
 from sre_agent.core.tool_executor import ToolExecutor
 from sre_agent.core.toolset_manager import ToolsetManager
 from sre_agent.utils.jinja import load_prompt
 from sre_agent.utils.streaming import StreamEventType
+
+logger = logging.getLogger(__name__)
 
 app = typer.Typer(name="sre-agent", help="AI-powered SRE agent for infrastructure diagnostics")
 console = Console()
@@ -66,6 +70,23 @@ def _build_engine(
         converge_threshold=config.converge_threshold,
     )
 
+    # 初始化跨会话调查记忆系统（可选）。
+    memory_store: MemoryStore | None = None
+    if config.memory_enabled:
+        try:
+            from sre_agent.core.embedder import SentenceTransformerEmbedder
+
+            embedder = SentenceTransformerEmbedder(config.embedding_model)
+            memory_store = MemoryStore(
+                embedder=embedder,
+                llm=llm,
+                memory_dir=config.memory_dir,
+                top_k=config.memory_top_k,
+                score_threshold=config.memory_score_threshold,
+            )
+        except Exception:
+            logger.warning("调查记忆系统初始化失败，已降级为禁用模式", exc_info=True)
+
     available_toolsets = mgr.get_available_toolsets()
     system_prompt = load_prompt("system", {"toolsets": available_toolsets})
 
@@ -76,6 +97,7 @@ def _build_engine(
             max_steps=config.max_steps,
             max_output_lines=config.max_tool_output_lines,
             context_manager=context_manager,
+            memory_store=memory_store,
         ),
         system_prompt,
         mgr,
