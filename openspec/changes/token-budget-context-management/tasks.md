@@ -30,21 +30,21 @@
 
 ## 5. Engine Integration
 
-- [ ] 5.1 Modify Engine.__init__ to accept and hold ContextManager instance
-- [ ] 5.2 Modify Engine.call_stream loop: add budget check at start of each iteration
-- [ ] 5.3 Implement graceful convergence path: inject convergence prompt with scratchpad, set tool_choice=none, yield ANSWER_END with converged=true
-- [ ] 5.4 Implement built-in tool routing: before passing tool_calls to ToolExecutor, intercept update_scratchpad and recall_evidence
-- [ ] 5.5 Implement immediate compression in tool result processing: after ToolExecutor returns, pass each result through ContextManager.compress_immediate
-- [ ] 5.6 Inject scratchpad into system prompt each iteration (append to messages[0] or manage as dynamic system message)
-- [ ] 5.7 Include built-in tool schemas in the tools list passed to LLM
-- [ ] 5.8 Add integration tests for full engine loop: verify compression triggers, convergence triggers, scratchpad injection
+- [x] 5.1 Modify Engine.__init__ to accept and hold ContextManager instance
+- [x] 5.2 Modify Engine.call_stream loop: add budget check at start of each iteration
+- [x] 5.3 Implement graceful convergence path: inject convergence prompt with scratchpad, set tool_choice=none, yield ANSWER_END with converged=true
+- [x] 5.4 Implement built-in tool routing: before passing tool_calls to ToolExecutor, intercept update_scratchpad and recall_evidence
+- [x] 5.5 Implement immediate compression in tool result processing: after ToolExecutor returns, pass each result through ContextManager.compress_immediate
+- [x] 5.6 Inject scratchpad into system prompt each iteration (append to messages[0] or manage as dynamic system message)
+- [x] 5.7 Include built-in tool schemas in the tools list passed to LLM
+- [x] 5.8 Add integration tests for full engine loop: verify compression triggers, convergence triggers, scratchpad injection
 
 ## 6. CLI & Config Wiring
 
-- [ ] 6.1 Update Config: change max_steps default to 50, add `compress_threshold` (0.70) and `converge_threshold` (0.90) config fields
-- [ ] 6.2 Update `_build_engine` in cli.py: construct ContextManager with tool_name→Toolset mapping, pass to Engine
-- [ ] 6.3 Update system prompt template (system.j2): add instructions for scratchpad usage and built-in tools description
-- [ ] 6.4 Add ANSWER_END converged flag handling in `_render_stream`: display a note to user that convergence was triggered
+- [x] 6.1 Update Config: change max_steps default to 50, add `compress_threshold` (0.70) and `converge_threshold` (0.90) config fields
+- [x] 6.2 Update `_build_engine` in cli.py: construct ContextManager with tool_name→Toolset mapping, pass to Engine
+- [x] 6.3 Update system prompt template (system.j2): add instructions for scratchpad usage and built-in tools description
+- [x] 6.4 Add ANSWER_END converged flag handling in `_render_stream`: display a note to user that convergence was triggered
 
 ## 7. Validation & Polish
 

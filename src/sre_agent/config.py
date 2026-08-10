@@ -49,8 +49,10 @@ class Config(BaseSettings):
     )
 
     model: str | None = None
-    max_steps: int = 30
+    max_steps: int = 50
     max_tool_output_lines: int = 2000
+    compress_threshold: float = 0.70
+    converge_threshold: float = 0.90
 
     toolsets: dict[str, ToolsetConfig] = Field(default_factory=dict)
     models: dict[str, ModelEntry] = Field(default_factory=dict)

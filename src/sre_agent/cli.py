@@ -11,8 +11,11 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 
 from sre_agent.config import DEFAULT_CONFIG_FILE, Config
+from sre_agent.core.context_manager import ContextManager
 from sre_agent.core.engine import Engine
+from sre_agent.core.evidence_store import EvidenceStore
 from sre_agent.core.llm import DefaultLLM
+from sre_agent.core.scratchpad import Scratchpad
 from sre_agent.core.tool_executor import ToolExecutor
 from sre_agent.core.toolset_manager import ToolsetManager
 from sre_agent.utils.jinja import load_prompt
@@ -25,13 +28,8 @@ console = Console()
 def _build_engine(
     config: Config, model_override: str | None = None
 ) -> tuple[Engine, str, ToolsetManager]:
-    """根据配置组装模型、可用工具和执行引擎。
+    """根据配置组装模型、可用工具和执行引擎。"""
 
-    返回值还包含渲染后的系统提示词和工具集管理器，供不同 CLI 子命令复用
-    同一套初始化流程。
-    """
-
-    # CLI 的 --model 优先级最高，具体选择规则集中在 Config 中维护。
     model_entry = config.resolve_model(model_override)
     llm = DefaultLLM(
         model=model_entry.model,
@@ -40,7 +38,6 @@ def _build_engine(
         api_version=model_entry.api_version,
     )
 
-    # 管理器接受普通映射或 Pydantic 配置对象，这里保留每个工具集的完整配置。
     toolset_config = {}
     for name, ts_cfg in config.toolsets.items():
         toolset_config[name] = ts_cfg
@@ -49,12 +46,28 @@ def _build_engine(
     mgr.load_builtin_toolsets()
     mgr.check_prerequisites()
 
-    # 只把前置条件检查通过的工具暴露给模型，避免模型选择无法执行的工具。
     executor = ToolExecutor()
     for toolset in mgr.get_available_toolsets():
         executor.register_all(toolset.tools)
 
-    # 系统提示词会描述当前实际可用的能力，而不是所有理论支持的工具集。
+    # tool_name → Toolset mapping for compress() dispatch
+    tool_to_toolset = {
+        tool.name: toolset
+        for toolset in mgr.get_available_toolsets()
+        for tool in toolset.tools
+    }
+
+    evidence_store = EvidenceStore()
+    scratchpad = Scratchpad()
+    context_manager = ContextManager(
+        llm=llm,
+        evidence_store=evidence_store,
+        scratchpad=scratchpad,
+        toolsets=tool_to_toolset,
+        compress_threshold=config.compress_threshold,
+        converge_threshold=config.converge_threshold,
+    )
+
     available_toolsets = mgr.get_available_toolsets()
     system_prompt = load_prompt("system", {"toolsets": available_toolsets})
 
@@ -63,6 +76,7 @@ def _build_engine(
         tool_executor=executor,
         max_steps=config.max_steps,
         max_output_lines=config.max_tool_output_lines,
+        context_manager=context_manager,
     ), system_prompt, mgr
 
 
@@ -75,16 +89,19 @@ def _render_stream(engine: Engine, messages: list[dict]) -> str:
             name = event.data.get("name", "")
             console.print(f"  [dim]▶ calling {name}...[/dim]")
         elif event.event == StreamEventType.TOOL_RESULT:
-            # 终端只展示短预览；完整输出已经作为 tool 消息反馈给模型。
             content = event.data.get("content", "")
             status = "[OK]" if not content.startswith("ERROR") else "[FAIL]"
             preview = content[:80].replace("\n", " ")
             console.print(f"  [dim]{status} {preview}[/dim]")
         elif event.event == StreamEventType.AI_MESSAGE:
-            # 当前 CLI 不逐 token 打印中间推理文本，只在结束时渲染最终答案。
             pass
         elif event.event == StreamEventType.ANSWER_END:
             answer = event.data.get("content", "")
+            if event.data.get("converged"):
+                console.print(
+                    "\n  [yellow]⚠ 上下文预算耗尽，已根据现有调查结果强制收敛。"
+                    "如需继续，请开启新会话或减少工具调用。[/yellow]"
+                )
     return answer
 
 

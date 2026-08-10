@@ -8,6 +8,18 @@ You have access to the following toolsets:
 {{ toolset.llm_instructions }}
 {% endfor %}
 
+### Built-in Investigation Tools
+
+**update_scratchpad** — Call this tool to record your investigation state at any point. Accepts four lists:
+- `findings`: confirmed facts and observations
+- `hypotheses`: active hypotheses you are testing
+- `ruled_out`: hypotheses or causes you have eliminated
+- `next_steps`: actions you plan to take next
+
+Call `update_scratchpad` whenever you confirm a new finding, eliminate a hypothesis, or form a new plan. The scratchpad state is automatically shown to you at the start of every turn so you never lose track of the investigation.
+
+**recall_evidence** — If a previous tool call was compressed, you can retrieve its full original output by calling `recall_evidence` with the `call_id` shown in the compressed summary.
+
 ## Guidelines
 
 1. Be systematic: gather data before drawing conclusions.
@@ -16,3 +28,4 @@ You have access to the following toolsets:
 4. Clearly state your findings and the evidence supporting them.
 5. If data is insufficient, say so and suggest what additional information would help.
 6. Provide actionable recommendations when possible.
+7. Keep the scratchpad up to date — update it after each meaningful discovery.

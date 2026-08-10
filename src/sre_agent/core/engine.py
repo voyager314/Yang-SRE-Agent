@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Generator
 from typing import Any
 
 from pydantic import BaseModel
 
+from sre_agent.core.context_manager import BudgetStatus, ContextManager
 from sre_agent.core.llm import LLM
-from sre_agent.core.tool_executor import ToolExecutor
+from sre_agent.core.tool import Tool
+from sre_agent.core.tool_executor import ToolExecutor, _format_result_for_llm
 from sre_agent.utils.streaming import StreamEvent, StreamEventType
+
+_CONVERGE_PROMPT = (
+    "上下文预算已接近上限。请立即根据现有调查结果给出最终结论，"
+    "不要再调用任何工具。"
+)
 
 
 class EngineResult(BaseModel):
@@ -17,16 +25,18 @@ class EngineResult(BaseModel):
 
     ``messages`` 指向调用方传入的消息列表；引擎执行期间会把助手消息和工具
     结果追加到该列表，以便调用方继续进行多轮对话。
+    ``converged`` 为 True 表示因上下文预算触发强制收敛，而非模型自然结束。
     """
 
     answer: str
     tool_calls: list[dict[str, Any]] = []
     messages: list[dict[str, Any]] = []
     iterations: int = 0
+    converged: bool = False
 
 
 class Engine:
-    """执行“请求模型 -> 调用工具 -> 将结果交还模型”的迭代循环。"""
+    """执行"请求模型 -> 调用工具 -> 将结果交还模型"的迭代循环。"""
 
     def __init__(
         self,
@@ -34,34 +44,37 @@ class Engine:
         tool_executor: ToolExecutor,
         max_steps: int = 30,
         max_output_lines: int = 2000,
+        context_manager: ContextManager | None = None,
     ):
-        """保存运行依赖及安全上限。
-
-        ``max_steps`` 防止模型持续请求工具而无法收敛；``max_output_lines``
-        限制单个工具返回给模型的文本量，避免迅速耗尽上下文窗口。
-        """
-
         self.llm = llm
         self.tool_executor = tool_executor
         self.max_steps = max_steps
         self.max_output_lines = max_output_lines
+        self.context_manager = context_manager
+
+        # 5.1: hold builtin tools separately so they don't mix with external toolsets
+        self._builtin_tools: list[Tool] = []
+        self._builtin_map: dict[str, Tool] = {}
+        if context_manager is not None:
+            from sre_agent.core.builtin_tools import make_builtin_tools
+            self._builtin_tools = make_builtin_tools(
+                context_manager.scratchpad, context_manager.evidence_store
+            )
+            self._builtin_map = {t.name: t for t in self._builtin_tools}
 
     def call(self, messages: list[dict[str, Any]]) -> EngineResult:
-        """以非流式方式运行调查，并将流事件聚合成一个结果对象。
-
-        该方法与 :meth:`call_stream` 共用同一套执行逻辑，避免流式和非流式
-        两种入口出现行为差异。
-        """
+        """以非流式方式运行调查，并将流事件聚合成一个结果对象。"""
 
         answer = ""
         all_tool_calls: list[dict[str, Any]] = []
         iterations = 0
+        converged = False
 
-        # 消费全部事件，只保留最终答案、迭代次数及每次工具调用的结果。
         for event in self.call_stream(messages):
             if event.event == StreamEventType.ANSWER_END:
                 answer = event.data.get("content", "")
                 iterations = event.data.get("iterations", 0)
+                converged = event.data.get("converged", False)
             elif event.event == StreamEventType.TOOL_RESULT:
                 all_tool_calls.append(event.data)
 
@@ -70,27 +83,39 @@ class Engine:
             tool_calls=all_tool_calls,
             messages=messages,
             iterations=iterations,
+            converged=converged,
         )
 
     def call_stream(
         self, messages: list[dict[str, Any]]
     ) -> Generator[StreamEvent]:
-        """逐步产出调查事件，供 CLI 等调用方实时展示执行进度。
+        """逐步产出调查事件，供 CLI 等调用方实时展示执行进度。"""
 
-        此方法会原地扩展 ``messages``：先记录包含 ``tool_calls`` 的 assistant
-        消息，再追加对应的 tool 消息。这是大多数支持工具调用的模型 API 所
-        要求的对话顺序。
-        """
+        cm = self.context_manager
 
-        # 工具只需在循环开始前转换一次为 OpenAI function schema。
-        tools = self.tool_executor.get_openai_tools()
+        # 5.7: build full schema list: external tools + builtin tools
+        base_tools = self.tool_executor.get_openai_tools()
+        builtin_schemas = [t.to_openai_tool() for t in self._builtin_tools]
+        all_tools = base_tools + builtin_schemas
+
         iteration = 0
 
         while iteration < self.max_steps:
-            # 首轮读取用户问题；后续轮次还会读取刚刚追加的工具结果。
-            response = self.llm.completion(messages, tools=tools if tools else None)
+            # 5.2: budget check at start of each iteration
+            if cm is not None:
+                status = cm.check_budget(messages, all_tools)
+                if status == BudgetStatus.CONVERGE:
+                    # 5.3: forced convergence — ask model to conclude without tools
+                    yield from self._converge(messages, iteration, cm)
+                    return
+                elif status == BudgetStatus.COMPRESS:
+                    messages[:] = cm.compress_batch(messages)
 
-            # 即使模型同时请求工具，也保留它附带的解释文本供界面展示。
+            # 5.6: inject current scratchpad into system message for this call only
+            effective = _inject_scratchpad(messages, cm)
+
+            response = self.llm.completion(effective, tools=all_tools or None)
+
             if response.content:
                 yield StreamEvent(
                     event=StreamEventType.AI_MESSAGE,
@@ -98,17 +123,16 @@ class Engine:
                 )
 
             if not response.tool_calls:
-                # 没有工具调用表示模型已经形成最终结论，本次调查正常收敛。
                 yield StreamEvent(
                     event=StreamEventType.ANSWER_END,
                     data={
                         "content": response.content or "",
                         "iterations": iteration + 1,
+                        "converged": False,
                     },
                 )
                 return
 
-            # 先通知界面所有即将开始的工具，再真正执行，便于及时显示状态。
             for tc in response.tool_calls:
                 yield StreamEvent(
                     event=StreamEventType.TOOL_START,
@@ -119,32 +143,132 @@ class Engine:
                     },
                 )
 
-            # 工具结果必须关联在声明 tool_calls 的 assistant 消息之后。
             messages.append({
                 "role": "assistant",
                 "content": response.content,
                 "tool_calls": response.tool_calls,
             })
 
-            # 同一轮中的工具调用彼此独立，可以并行执行以缩短调查时间。
-            tool_results = self.tool_executor.execute_parallel(
-                response.tool_calls, max_output_lines=self.max_output_lines
+            # 5.4: route tool calls — builtin executed synchronously, external in parallel
+            builtin_calls = [
+                tc for tc in response.tool_calls
+                if tc["function"]["name"] in self._builtin_map
+            ]
+            external_calls = [
+                tc for tc in response.tool_calls
+                if tc["function"]["name"] not in self._builtin_map
+            ]
+
+            id_to_name = {tc["id"]: tc["function"]["name"] for tc in response.tool_calls}
+
+            builtin_results = [self._execute_builtin(tc) for tc in builtin_calls]
+
+            external_results = (
+                self.tool_executor.execute_parallel(
+                    external_calls, max_output_lines=self.max_output_lines
+                )
+                if external_calls
+                else []
             )
 
-            for tr in tool_results:
-                yield StreamEvent(
-                    event=StreamEventType.TOOL_RESULT,
-                    data=tr,
-                )
+            # 5.5: immediate compression on external tool results
+            if cm is not None:
+                external_results = [
+                    _apply_immediate_compress(cm, tr, id_to_name.get(tr["tool_call_id"], ""))
+                    for tr in external_results
+                ]
+
+            # restore original call order before appending to messages
+            all_results = builtin_results + external_results
+            call_order = {tc["id"]: i for i, tc in enumerate(response.tool_calls)}
+            all_results.sort(key=lambda r: call_order.get(r["tool_call_id"], 0))
+
+            for tr in all_results:
+                yield StreamEvent(event=StreamEventType.TOOL_RESULT, data=tr)
                 messages.append(tr)
 
             iteration += 1
 
-        # 达到上限时也使用 ANSWER_END，让所有调用方走统一的收尾路径。
         yield StreamEvent(
             event=StreamEventType.ANSWER_END,
             data={
                 "content": f"已达最大步数 ({self.max_steps})，调查未完成。",
                 "iterations": iteration,
+                "converged": False,
             },
         )
+
+    def _converge(
+        self, messages: list[dict[str, Any]], iteration: int, cm: ContextManager
+    ) -> Generator[StreamEvent]:
+        """注入收敛提示，要求模型不调用工具直接给出结论。"""
+
+        content = _CONVERGE_PROMPT
+        if not cm.scratchpad.is_empty():
+            content += f"\n\n当前调查记录：\n{cm.scratchpad.to_yaml()}"
+
+        converge_messages = list(messages) + [{"role": "user", "content": content}]
+        response = self.llm.completion(converge_messages, tool_choice="none")
+        answer = response.content or ""
+
+        if answer:
+            yield StreamEvent(event=StreamEventType.AI_MESSAGE, data={"content": answer})
+
+        yield StreamEvent(
+            event=StreamEventType.ANSWER_END,
+            data={
+                "content": answer,
+                "iterations": iteration + 1,
+                "converged": True,
+            },
+        )
+
+    def _execute_builtin(self, tc: dict[str, Any]) -> dict[str, Any]:
+        """同步执行内置工具调用，返回 tool 消息字典。"""
+
+        name = tc["function"]["name"]
+        tool = self._builtin_map[name]
+        args = tc["function"]["arguments"]
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+        result = tool.invoke(args)
+        return {
+            "tool_call_id": tc["id"],
+            "role": "tool",
+            "content": _format_result_for_llm(result),
+        }
+
+
+def _inject_scratchpad(
+    messages: list[dict[str, Any]], cm: ContextManager | None
+) -> list[dict[str, Any]]:
+    """Return a shallow-copied messages list with scratchpad appended to system message.
+
+    The original list is never mutated — each LLM call gets a fresh view of the
+    current scratchpad state without accumulating stale copies.
+    """
+    if cm is None or cm.scratchpad.is_empty():
+        return messages
+    effective = list(messages)
+    if effective and effective[0].get("role") == "system":
+        sys_msg = dict(effective[0])
+        sys_msg["content"] = (
+            (sys_msg.get("content") or "")
+            + f"\n\n## 当前调查记录\n{cm.scratchpad.to_yaml()}"
+        )
+        effective[0] = sys_msg
+    return effective
+
+
+def _apply_immediate_compress(
+    cm: ContextManager, tr: dict[str, Any], tool_name: str
+) -> dict[str, Any]:
+    """Pass a tool result through ContextManager.compress_immediate if needed."""
+    original = tr["content"]
+    compressed = cm.compress_immediate(tr["tool_call_id"], tool_name, original)
+    if compressed is original:
+        return tr
+    return {**tr, "content": compressed}

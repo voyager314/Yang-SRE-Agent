@@ -561,3 +561,190 @@ class TestBuiltinTools:
         assert "recall_evidence" in names
         recall_schema = next(s for s in schemas if s["function"]["name"] == "recall_evidence")
         assert "call_id" in recall_schema["function"]["parameters"]["properties"]
+
+
+# ---------------------------------------------------------------------------
+# Engine integration helpers
+# ---------------------------------------------------------------------------
+
+def _make_seq_llm(responses, token_counts, window=100_000):
+    """Fake LLM that returns pre-programmed responses and token counts in order."""
+    from sre_agent.core.llm import LLM
+
+    class _SeqLLM(LLM):
+        def __init__(self):
+            self._r = list(responses)
+            self._tc = list(token_counts)
+            self.calls = []  # (messages, tools, tool_choice)
+
+        def completion(self, messages, tools=None, tool_choice=None):
+            self.calls.append((messages, tools, tool_choice))
+            return self._r.pop(0) if self._r else ModelResponse(content="done")
+
+        def count_tokens(self, messages, tools=None):
+            return self._tc.pop(0) if self._tc else 0
+
+        def get_context_window_size(self):
+            return window
+
+    return _SeqLLM()
+
+
+def _make_cm(llm, tmp_path):
+    """Return (ContextManager, scratchpad, evidence_store) backed by tmp_path."""
+    from sre_agent.core.context_manager import ContextManager
+    from sre_agent.core.evidence_store import EvidenceStore
+    from sre_agent.core.scratchpad import Scratchpad
+
+    store = EvidenceStore(base_dir=tmp_path)
+    sp = Scratchpad()
+    return ContextManager(llm=llm, evidence_store=store, scratchpad=sp, toolsets={}), sp, store
+
+
+class TestEngineIntegration:
+    def test_convergence_triggered(self, tmp_path):
+        llm = _make_seq_llm(
+            responses=[ModelResponse(content="forced conclusion")],
+            token_counts=[91_000],  # 91 % of 100 k → CONVERGE
+            window=100_000,
+        )
+        cm, _, _ = _make_cm(llm, tmp_path)
+        engine = Engine(llm=llm, tool_executor=ToolExecutor(), context_manager=cm)
+
+        result = engine.call([{"role": "user", "content": "investigate"}])
+
+        assert result.converged is True
+        assert result.answer == "forced conclusion"
+        assert len(llm.calls) == 1
+        _, _, tool_choice = llm.calls[0]
+        assert tool_choice == "none"
+
+    def test_builtin_tool_routing(self, tmp_path):
+        import json
+
+        update_call = {
+            "id": "tc_sp",
+            "type": "function",
+            "function": {
+                "name": "update_scratchpad",
+                "arguments": json.dumps({"findings": ["cpu spike on node-1"]}),
+            },
+        }
+        llm = _make_seq_llm(
+            responses=[
+                ModelResponse(tool_calls=[update_call]),
+                ModelResponse(content="done"),
+            ],
+            token_counts=[0, 0],
+        )
+        cm, sp, _ = _make_cm(llm, tmp_path)
+        engine = Engine(llm=llm, tool_executor=ToolExecutor(), context_manager=cm)
+
+        result = engine.call([{"role": "user", "content": "investigate"}])
+
+        assert "cpu spike on node-1" in sp.findings
+        assert result.answer == "done"
+        assert result.converged is False
+
+    def test_immediate_compression(self, tmp_path):
+        import json
+
+        big = "\n".join(f"{'x' * 60} line {i}" for i in range(300))  # ~20 k chars > 16 k threshold
+
+        tool_call = {
+            "id": "tc_big",
+            "type": "function",
+            "function": {"name": "echo_tool", "arguments": "{}"},
+        }
+
+        class _EchoTool(Tool):
+            def __init__(self):
+                super().__init__("echo_tool", "echoes large output", {"type": "object", "properties": {}})
+
+            def _invoke(self, params):
+                return StructuredToolResult(status=ToolResultStatus.SUCCESS, data=big)
+
+        executor = ToolExecutor()
+        executor.register(_EchoTool())
+
+        llm = _make_seq_llm(
+            responses=[
+                ModelResponse(tool_calls=[tool_call]),
+                ModelResponse(content="done"),
+            ],
+            token_counts=[0, 0],
+        )
+        cm, _, store = _make_cm(llm, tmp_path)
+        engine = Engine(llm=llm, tool_executor=executor, context_manager=cm)
+
+        messages = [{"role": "user", "content": "q"}]
+        engine.call(messages)
+
+        tool_msgs = [m for m in messages if m.get("role") == "tool"]
+        assert tool_msgs, "no tool message found in messages"
+        assert len(tool_msgs[0]["content"]) < len(big)
+        assert store.load("tc_big") is not None
+
+    def test_scratchpad_injected_into_system_message(self, tmp_path):
+        import json
+
+        update_call = {
+            "id": "tc_inject",
+            "type": "function",
+            "function": {
+                "name": "update_scratchpad",
+                "arguments": json.dumps({"findings": ["memory leak detected"]}),
+            },
+        }
+        llm = _make_seq_llm(
+            responses=[
+                ModelResponse(tool_calls=[update_call]),
+                ModelResponse(content="done"),
+            ],
+            token_counts=[0, 0],
+        )
+        cm, _, _ = _make_cm(llm, tmp_path)
+        engine = Engine(llm=llm, tool_executor=ToolExecutor(), context_manager=cm)
+
+        messages = [
+            {"role": "system", "content": "you are an SRE agent"},
+            {"role": "user", "content": "investigate"},
+        ]
+        engine.call(messages)
+
+        assert len(llm.calls) == 2
+        second_sys_content = llm.calls[1][0][0]["content"]
+        assert "memory leak detected" in second_sys_content
+        # Original list must NOT be mutated by scratchpad injection
+        assert "memory leak detected" not in messages[0]["content"]
+
+    def test_compress_batch_triggered(self, tmp_path):
+        big = "\n".join(f"{'x' * 60} line {i}" for i in range(300))  # ~20 k chars > 16 k threshold
+
+        pre = [{"role": "system", "content": "sys"}, {"role": "user", "content": "q"}]
+        for i in range(8):
+            pre.append({
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": f"old{i}", "type": "function",
+                                "function": {"name": "bash", "arguments": "{}"}}],
+            })
+            pre.append({"role": "tool", "tool_call_id": f"old{i}", "content": big})
+
+        llm = _make_seq_llm(
+            responses=[ModelResponse(content="done")],
+            token_counts=[75_000],  # 75 % of 100 k → COMPRESS
+            window=100_000,
+        )
+        cm, _, _ = _make_cm(llm, tmp_path)
+        engine = Engine(llm=llm, tool_executor=ToolExecutor(), context_manager=cm)
+        engine.call(pre)
+
+        tool_msgs = [m for m in pre if m.get("role") == "tool"]
+        assert len(tool_msgs) == 8
+        # Oldest 3 (beyond recent-5 window) must be compressed
+        for m in tool_msgs[:3]:
+            assert len(m["content"]) < len(big), "old tool message should have been compressed"
+        # Recent 5 must be unchanged
+        for m in tool_msgs[3:]:
+            assert m["content"] == big, "recent tool message should be preserved"
