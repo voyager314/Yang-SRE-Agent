@@ -10,7 +10,7 @@ from .llm import LLM
 from .scratchpad import Scratchpad
 from .tool import Toolset
 
-_IMMEDIATE_CHAR_THRESHOLD = 16_000  # ~4K tokens at 4 chars/token
+_IMMEDIATE_CHAR_THRESHOLD = 16_000  # 按每个 token 约四个字符估算，约为 4K token。
 _RECENT_CALLS_TO_KEEP = 5
 
 

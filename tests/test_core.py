@@ -504,10 +504,10 @@ class TestContextManager:
             {"role": "tool", "tool_call_id": f"c{i}", "content": big_content} for i in range(8)
         ]
         result = cm.compress_batch(messages)
-        # last 5 must be unchanged
+        # 最近 5 条必须保持不变。
         for msg in result[-5:]:
             assert msg["content"] == big_content
-        # earlier ones must be compressed
+        # 更早的消息必须被压缩。
         for msg in result[:3]:
             assert len(msg["content"]) < len(big_content)
 
@@ -614,19 +614,19 @@ class TestBuiltinTools:
 
 
 # ---------------------------------------------------------------------------
-# Engine integration helpers
+# 引擎集成测试辅助函数
 # ---------------------------------------------------------------------------
 
 
 def _make_seq_llm(responses, token_counts, window=100_000):
-    """Fake LLM that returns pre-programmed responses and token counts in order."""
+    """按顺序返回预设响应和 token 数量的伪 LLM。"""
     from sre_agent.core.llm import LLM
 
     class _SeqLLM(LLM):
         def __init__(self):
             self._r = list(responses)
             self._tc = list(token_counts)
-            self.calls = []  # (messages, tools, tool_choice)
+            self.calls = []  # 每次调用依次记录 (messages, tools, tool_choice)。
 
         def completion(self, messages, tools=None, tool_choice=None):
             self.calls.append((messages, tools, tool_choice))
@@ -642,7 +642,7 @@ def _make_seq_llm(responses, token_counts, window=100_000):
 
 
 def _make_cm(llm, tmp_path):
-    """Return (ContextManager, scratchpad, evidence_store) backed by tmp_path."""
+    """返回以 tmp_path 为存储目录的 (ContextManager, scratchpad, evidence_store)。"""
     from sre_agent.core.context_manager import ContextManager
     from sre_agent.core.evidence_store import EvidenceStore
     from sre_agent.core.scratchpad import Scratchpad
@@ -656,7 +656,7 @@ class TestEngineIntegration:
     def test_convergence_triggered(self, tmp_path):
         llm = _make_seq_llm(
             responses=[ModelResponse(content="forced conclusion")],
-            token_counts=[91_000],  # 91 % of 100 k → CONVERGE
+            token_counts=[91_000],  # 100K 的 91%，应触发 CONVERGE。
             window=100_000,
         )
         cm, _, _ = _make_cm(llm, tmp_path)
@@ -698,7 +698,7 @@ class TestEngineIntegration:
         assert result.converged is False
 
     def test_immediate_compression(self, tmp_path):
-        big = "\n".join(f"{'x' * 60} line {i}" for i in range(300))  # ~20 k chars > 16 k threshold
+        big = "\n".join(f"{'x' * 60} line {i}" for i in range(300))  # 约 20K 字符，超过 16K 阈值。
 
         tool_call = {
             "id": "tc_big",
@@ -766,11 +766,11 @@ class TestEngineIntegration:
         assert len(llm.calls) == 2
         second_sys_content = llm.calls[1][0][0]["content"]
         assert "memory leak detected" in second_sys_content
-        # Original list must NOT be mutated by scratchpad injection
+        # 注入记录本时不得修改原始消息列表。
         assert "memory leak detected" not in messages[0]["content"]
 
     def test_compress_batch_triggered(self, tmp_path):
-        big = "\n".join(f"{'x' * 60} line {i}" for i in range(300))  # ~20 k chars > 16 k threshold
+        big = "\n".join(f"{'x' * 60} line {i}" for i in range(300))  # 约 20K 字符，超过 16K 阈值。
 
         pre = [{"role": "system", "content": "sys"}, {"role": "user", "content": "q"}]
         for i in range(8):
@@ -791,7 +791,7 @@ class TestEngineIntegration:
 
         llm = _make_seq_llm(
             responses=[ModelResponse(content="done")],
-            token_counts=[75_000],  # 75 % of 100 k → COMPRESS
+            token_counts=[75_000],  # 100K 的 75%，应触发 COMPRESS。
             window=100_000,
         )
         cm, _, _ = _make_cm(llm, tmp_path)
@@ -800,9 +800,9 @@ class TestEngineIntegration:
 
         tool_msgs = [m for m in pre if m.get("role") == "tool"]
         assert len(tool_msgs) == 8
-        # Oldest 3 (beyond recent-5 window) must be compressed
+        # 最早 3 条（在最近 5 条窗口之外）必须被压缩。
         for m in tool_msgs[:3]:
             assert len(m["content"]) < len(big), "old tool message should have been compressed"
-        # Recent 5 must be unchanged
+        # 最近 5 条必须保持不变。
         for m in tool_msgs[3:]:
             assert m["content"] == big, "recent tool message should be preserved"

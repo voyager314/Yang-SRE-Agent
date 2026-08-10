@@ -50,7 +50,7 @@ def _build_engine(
     for toolset in mgr.get_available_toolsets():
         executor.register_all(toolset.tools)
 
-    # tool_name → Toolset mapping for compress() dispatch
+    # 建立 tool_name → Toolset 映射，供压缩逻辑按工具集分发。
     tool_to_toolset = {
         tool.name: toolset for toolset in mgr.get_available_toolsets() for tool in toolset.tools
     }

@@ -5,7 +5,7 @@
 ## ADDED Requirements
 
 ### Requirement: Iterative agentic loop
-系统 SHALL 实现迭代式智能体循环：每轮调用 LLM，若 LLM 返回 tool_calls 则执行工具并将结果追加到消息历史，直到 LLM 给出最终回答或达到 max_steps 上限。
+引擎循环终止条件 SHALL 由 token 预算水位线驱动，max_steps 降级为防死循环兜底。
 
 #### Scenario: LLM 直接回答
 - **WHEN** LLM 第一轮响应不包含 tool_calls
@@ -15,9 +15,17 @@
 - **WHEN** LLM 连续 3 轮返回 tool_calls
 - **THEN** 引擎依次执行工具、追加结果、重新调用 LLM，直到第 4 轮 LLM 给出最终回答
 
-#### Scenario: 达到 max_steps 上限
-- **WHEN** 迭代次数达到配置的 max_steps
-- **THEN** 引擎停止循环，返回当前已有的对话内容和一条提示"已达最大步数"
+#### Scenario: token 预算驱动收敛
+- **WHEN** 循环中上下文占用率达到 90%
+- **THEN** 引擎触发优雅收敛，而非继续迭代直到 max_steps
+
+#### Scenario: max_steps 兜底
+- **WHEN** 模型持续请求工具但上下文占用率始终低于 90%，迭代次数达到 max_steps（默认 50）
+- **THEN** 引擎触发优雅收敛，行为与 token 预算收敛一致
+
+#### Scenario: 每步水位检查
+- **WHEN** 每轮迭代开始
+- **THEN** 引擎调用 llm.count_tokens() 和 llm.get_context_window_size() 计算占用率
 
 ### Requirement: Parallel tool execution
 系统 SHALL 在单轮中并发执行 LLM 返回的多个 tool_calls。
@@ -34,8 +42,27 @@
 - **THEN** 每个工具执行产生 TOOL_START 和 TOOL_RESULT 事件，最终回答产生 ANSWER_END 事件
 
 ### Requirement: Context window truncation
-当工具输出超过配置的最大长度时，系统 SHALL 截断输出并在末尾附加提示告知 LLM 内容已被截断。
+工具输出截断 SHALL 基于 token 估算触发语义压缩，而非固定行数截断。
 
-#### Scenario: 工具输出超长
-- **WHEN** 某工具返回 10000 行文本，配置的最大输出长度为 2000 行
-- **THEN** 系统截断到 2000 行并附加 "[输出已截断，原始长度 10000 行]"
+#### Scenario: 小输出不压缩
+- **WHEN** 工具输出 <= 2K tokens
+- **THEN** 原样保留，追加到消息历史
+
+#### Scenario: 大输出语义压缩
+- **WHEN** 工具输出 > 4-8K tokens
+- **THEN** 调用 Toolset.compress() 进行语义压缩，完整输出落盘到证据库
+
+### Requirement: Built-in tool routing
+引擎 SHALL 识别内置工具（update_scratchpad, recall_evidence）并在内部处理，不经过 ToolExecutor 的外部工具执行路径。
+
+#### Scenario: update_scratchpad 内部处理
+- **WHEN** LLM 返回的 tool_calls 中包含 update_scratchpad
+- **THEN** 引擎直接更新内部 scratchpad 对象，返回确认消息，不调用 ToolExecutor
+
+#### Scenario: recall_evidence 内部处理
+- **WHEN** LLM 返回的 tool_calls 中包含 recall_evidence
+- **THEN** 引擎从 EvidenceStore 读取文件内容并返回，不调用 ToolExecutor
+
+#### Scenario: 混合工具调用
+- **WHEN** LLM 单轮返回的 tool_calls 同时包含内置工具和外部工具
+- **THEN** 内置工具在引擎内处理，外部工具通过 ToolExecutor 并发执行，两者结果合并追加到消息历史

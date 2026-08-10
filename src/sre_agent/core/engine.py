@@ -49,7 +49,7 @@ class Engine:
         self.max_output_lines = max_output_lines
         self.context_manager = context_manager
 
-        # 5.1: hold builtin tools separately so they don't mix with external toolsets
+        # 内置工具独立保存，避免与外部工具集混合注册。
         self._builtin_tools: list[Tool] = []
         self._builtin_map: dict[str, Tool] = {}
         if context_manager is not None:
@@ -89,7 +89,7 @@ class Engine:
 
         cm = self.context_manager
 
-        # 5.7: build full schema list: external tools + builtin tools
+        # 构建完整的工具 Schema 列表：外部工具加内置工具。
         base_tools = self.tool_executor.get_openai_tools()
         builtin_schemas = [t.to_openai_tool() for t in self._builtin_tools]
         all_tools = base_tools + builtin_schemas
@@ -97,17 +97,17 @@ class Engine:
         iteration = 0
 
         while iteration < self.max_steps:
-            # 5.2: budget check at start of each iteration
+            # 每轮开始前检查上下文预算。
             if cm is not None:
                 status = cm.check_budget(messages, all_tools)
                 if status == BudgetStatus.CONVERGE:
-                    # 5.3: forced convergence — ask model to conclude without tools
+                    # 预算接近上限时强制收敛，要求模型不调用工具直接作答。
                     yield from self._converge(messages, iteration, cm)
                     return
                 elif status == BudgetStatus.COMPRESS:
                     messages[:] = cm.compress_batch(messages)
 
-            # 5.6: inject current scratchpad into system message for this call only
+            # 仅为本次调用将当前记录本注入系统消息，不修改原始消息列表。
             effective = _inject_scratchpad(messages, cm)
 
             response = self.llm.completion(effective, tools=all_tools or None)
@@ -147,7 +147,7 @@ class Engine:
                 }
             )
 
-            # 5.4: route tool calls — builtin executed synchronously, external in parallel
+            # 内置工具同步执行，外部工具并行执行。
             builtin_calls = [
                 tc for tc in response.tool_calls if tc["function"]["name"] in self._builtin_map
             ]
@@ -167,14 +167,14 @@ class Engine:
                 else []
             )
 
-            # 5.5: immediate compression on external tool results
+            # 外部工具结果返回后立即按需压缩。
             if cm is not None:
                 external_results = [
                     _apply_immediate_compress(cm, tr, id_to_name.get(tr["tool_call_id"], ""))
                     for tr in external_results
                 ]
 
-            # restore original call order before appending to messages
+            # 写入消息前恢复模型声明的原始调用顺序。
             all_results = builtin_results + external_results
             call_order = {tc["id"]: i for i, tc in enumerate(response.tool_calls)}
             all_results.sort(key=lambda r: call_order.get(r["tool_call_id"], 0))
@@ -241,10 +241,9 @@ class Engine:
 def _inject_scratchpad(
     messages: list[dict[str, Any]], cm: ContextManager | None
 ) -> list[dict[str, Any]]:
-    """Return a shallow-copied messages list with scratchpad appended to system message.
+    """浅拷贝消息列表，并将记录本附加到系统消息。
 
-    The original list is never mutated — each LLM call gets a fresh view of the
-    current scratchpad state without accumulating stale copies.
+    原始列表始终不被修改，确保每次 LLM 调用均看到最新记录本，且不会累积旧副本。
     """
     if cm is None or cm.scratchpad.is_empty():
         return messages
@@ -261,7 +260,7 @@ def _inject_scratchpad(
 def _apply_immediate_compress(
     cm: ContextManager, tr: dict[str, Any], tool_name: str
 ) -> dict[str, Any]:
-    """Pass a tool result through ContextManager.compress_immediate if needed."""
+    """按需通过 ContextManager.compress_immediate 压缩工具结果。"""
     original = tr["content"]
     compressed = cm.compress_immediate(tr["tool_call_id"], tool_name, original)
     if compressed is original:
