@@ -23,10 +23,10 @@
 
 ## 4. Built-in Tools
 
-- [ ] 4.1 Define `update_scratchpad` tool schema (OpenAI function format) with four list[str] parameters
-- [ ] 4.2 Define `recall_evidence` tool schema with call_id string parameter
-- [ ] 4.3 Implement built-in tool execution logic: update_scratchpad updates Scratchpad object and returns confirmation; recall_evidence reads from EvidenceStore
-- [ ] 4.4 Add unit tests for built-in tool execution (scratchpad update, evidence recall success/missing)
+- [x] 4.1 Define `update_scratchpad` tool schema (OpenAI function format) with four list[str] parameters
+- [x] 4.2 Define `recall_evidence` tool schema with call_id string parameter
+- [x] 4.3 Implement built-in tool execution logic: update_scratchpad updates Scratchpad object and returns confirmation; recall_evidence reads from EvidenceStore
+- [x] 4.4 Add unit tests for built-in tool execution (scratchpad update, evidence recall success/missing)
 
 ## 5. Engine Integration
 

@@ -488,3 +488,76 @@ class TestContextManager:
         result = cm.compress_batch(messages)
         assert result[0]["content"] == big
         assert result[1]["content"] == big
+
+
+class TestBuiltinTools:
+    def _make_store(self, tmp_path):
+        from sre_agent.core.evidence_store import EvidenceStore
+        return EvidenceStore(base_dir=tmp_path)
+
+    def _make_scratchpad(self):
+        from sre_agent.core.scratchpad import Scratchpad
+        return Scratchpad()
+
+    def test_update_scratchpad_returns_summary(self, tmp_path):
+        from sre_agent.core.builtin_tools import UpdateScratchpadTool
+        from sre_agent.core.tool import ToolResultStatus
+        sp = self._make_scratchpad()
+        tool = UpdateScratchpadTool(sp)
+        result = tool.invoke({
+            "findings": ["pod OOMKilled"],
+            "hypotheses": ["memory leak in app"],
+            "ruled_out": ["disk issue"],
+            "next_steps": ["check heap dump"],
+        })
+        assert result.status == ToolResultStatus.SUCCESS
+        assert "1 条发现" in result.data
+        assert "1 个假设" in result.data
+
+    def test_update_scratchpad_mutates_scratchpad(self, tmp_path):
+        from sre_agent.core.builtin_tools import UpdateScratchpadTool
+        sp = self._make_scratchpad()
+        tool = UpdateScratchpadTool(sp)
+        tool.invoke({"findings": ["cpu spike"], "next_steps": ["check top"]})
+        assert "cpu spike" in sp.findings
+        assert "check top" in sp.next_steps
+
+    def test_update_scratchpad_partial_params(self, tmp_path):
+        from sre_agent.core.builtin_tools import UpdateScratchpadTool
+        from sre_agent.core.tool import ToolResultStatus
+        sp = self._make_scratchpad()
+        tool = UpdateScratchpadTool(sp)
+        result = tool.invoke({"findings": ["latency up"]})
+        assert result.status == ToolResultStatus.SUCCESS
+        assert "1 条发现" in result.data
+
+    def test_recall_evidence_success(self, tmp_path):
+        from sre_agent.core.builtin_tools import RecallEvidenceTool
+        from sre_agent.core.tool import ToolResultStatus
+        store = self._make_store(tmp_path)
+        store.save("call_001", "full raw output here")
+        tool = RecallEvidenceTool(store)
+        result = tool.invoke({"call_id": "call_001"})
+        assert result.status == ToolResultStatus.SUCCESS
+        assert result.data == "full raw output here"
+
+    def test_recall_evidence_missing(self, tmp_path):
+        from sre_agent.core.builtin_tools import RecallEvidenceTool
+        from sre_agent.core.tool import ToolResultStatus
+        store = self._make_store(tmp_path)
+        tool = RecallEvidenceTool(store)
+        result = tool.invoke({"call_id": "nonexistent"})
+        assert result.status == ToolResultStatus.ERROR
+        assert "nonexistent" in result.error
+
+    def test_builtin_tools_openai_schema(self, tmp_path):
+        from sre_agent.core.builtin_tools import make_builtin_tools
+        sp = self._make_scratchpad()
+        store = self._make_store(tmp_path)
+        tools = make_builtin_tools(sp, store)
+        schemas = [t.to_openai_tool() for t in tools]
+        names = [s["function"]["name"] for s in schemas]
+        assert "update_scratchpad" in names
+        assert "recall_evidence" in names
+        recall_schema = next(s for s in schemas if s["function"]["name"] == "recall_evidence")
+        assert "call_id" in recall_schema["function"]["parameters"]["properties"]
