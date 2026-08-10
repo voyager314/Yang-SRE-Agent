@@ -390,3 +390,101 @@ class TestToolsetCompress:
         assert "ERROR: null pointer" in out
         assert "WARN: slow query" in out
         assert "共 80 行" in out
+
+
+class TestContextManager:
+    def _make_llm(self, used_tokens: int, window: int):
+        from sre_agent.core.llm import LLM, ModelResponse
+        class FakeLLM(LLM):
+            def completion(self, messages, tools=None, tool_choice=None):
+                return ModelResponse()
+            def count_tokens(self, messages, tools=None):
+                return used_tokens
+            def get_context_window_size(self):
+                return window
+        return FakeLLM()
+
+    def _make_cm(self, used: int, window: int, tmp_path=None):
+        from pathlib import Path
+        from sre_agent.core.context_manager import ContextManager
+        from sre_agent.core.evidence_store import EvidenceStore
+        from sre_agent.core.scratchpad import Scratchpad
+        base = tmp_path or Path("/tmp/test_cm")
+        return ContextManager(
+            llm=self._make_llm(used, window),
+            evidence_store=EvidenceStore(base_dir=base),
+            scratchpad=Scratchpad(),
+            toolsets={},
+        )
+
+    def test_check_budget_normal(self, tmp_path):
+        from sre_agent.core.context_manager import BudgetStatus
+        cm = self._make_cm(used=6000, window=100_000, tmp_path=tmp_path)
+        assert cm.check_budget([]) == BudgetStatus.NORMAL
+
+    def test_check_budget_compress(self, tmp_path):
+        from sre_agent.core.context_manager import BudgetStatus
+        cm = self._make_cm(used=75_000, window=100_000, tmp_path=tmp_path)
+        assert cm.check_budget([]) == BudgetStatus.COMPRESS
+
+    def test_check_budget_converge(self, tmp_path):
+        from sre_agent.core.context_manager import BudgetStatus
+        cm = self._make_cm(used=91_000, window=100_000, tmp_path=tmp_path)
+        assert cm.check_budget([]) == BudgetStatus.CONVERGE
+
+    def test_compress_immediate_short_passthrough(self, tmp_path):
+        cm = self._make_cm(used=0, window=100_000, tmp_path=tmp_path)
+        short = "x" * 100
+        assert cm.compress_immediate("c1", "bash", short) == short
+
+    def test_compress_immediate_long_stores_and_compresses(self, tmp_path):
+        from sre_agent.core.evidence_store import EvidenceStore
+        cm = self._make_cm(used=0, window=100_000, tmp_path=tmp_path)
+        cm.evidence_store = EvidenceStore(base_dir=tmp_path)
+        long_output = "\n".join(f"{'x' * 50} line {i}" for i in range(400))
+        result = cm.compress_immediate("call_abc", "bash", long_output)
+        assert "call_abc" in result
+        assert cm.evidence_store.load("call_abc") is not None
+
+    def test_compress_immediate_hint_in_output(self, tmp_path):
+        cm = self._make_cm(used=0, window=100_000, tmp_path=tmp_path)
+        long_output = "a" * 20_000
+        result = cm.compress_immediate("call_xyz", "unknown_tool", long_output)
+        assert "recall_evidence" in result
+        assert "call_xyz" in result
+
+    def test_compress_batch_preserves_recent(self, tmp_path):
+        cm = self._make_cm(used=0, window=100_000, tmp_path=tmp_path)
+        big_content = "\n".join(f"{'x' * 50} line {i}" for i in range(400))
+        messages = [
+            {"role": "tool", "tool_call_id": f"c{i}", "content": big_content}
+            for i in range(8)
+        ]
+        result = cm.compress_batch(messages)
+        # last 5 must be unchanged
+        for msg in result[-5:]:
+            assert msg["content"] == big_content
+        # earlier ones must be compressed
+        for msg in result[:3]:
+            assert len(msg["content"]) < len(big_content)
+
+    def test_compress_batch_short_content_untouched(self, tmp_path):
+        cm = self._make_cm(used=0, window=100_000, tmp_path=tmp_path)
+        messages = [
+            {"role": "tool", "tool_call_id": f"c{i}", "content": "short"}
+            for i in range(8)
+        ]
+        result = cm.compress_batch(messages)
+        for msg in result:
+            assert msg["content"] == "short"
+
+    def test_compress_batch_non_tool_messages_untouched(self, tmp_path):
+        cm = self._make_cm(used=0, window=100_000, tmp_path=tmp_path)
+        big = "x" * 20_000
+        messages = [
+            {"role": "user", "content": big},
+            {"role": "assistant", "content": big},
+        ]
+        result = cm.compress_batch(messages)
+        assert result[0]["content"] == big
+        assert result[1]["content"] == big

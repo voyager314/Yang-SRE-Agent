@@ -15,11 +15,11 @@
 
 ## 3. Context Manager
 
-- [ ] 3.1 Create `core/context_manager.py`: ContextManager class holding LLM reference, EvidenceStore, Scratchpad, and tool_name→Toolset mapping
-- [ ] 3.2 Implement `check_budget(messages, tools) -> BudgetStatus` returning NORMAL/COMPRESS/CONVERGE based on 70%/90% waterlines
-- [ ] 3.3 Implement `compress_immediate(call_id, tool_name, raw_output) -> str` for single-result compression on ingestion (threshold: 4K tokens)
-- [ ] 3.4 Implement `compress_batch(messages) -> messages` for bulk compression of older tool results when hitting 70% waterline (preserve recent 3-5 calls)
-- [ ] 3.5 Add unit tests for ContextManager (waterline calculation, immediate compression trigger, batch compression preserves recent results)
+- [x] 3.1 Create `core/context_manager.py`: ContextManager class holding LLM reference, EvidenceStore, Scratchpad, and tool_name→Toolset mapping
+- [x] 3.2 Implement `check_budget(messages, tools) -> BudgetStatus` returning NORMAL/COMPRESS/CONVERGE based on 70%/90% waterlines
+- [x] 3.3 Implement `compress_immediate(call_id, tool_name, raw_output) -> str` for single-result compression on ingestion (threshold: 4K tokens)
+- [x] 3.4 Implement `compress_batch(messages) -> messages` for bulk compression of older tool results when hitting 70% waterline (preserve recent 3-5 calls)
+- [x] 3.5 Add unit tests for ContextManager (waterline calculation, immediate compression trigger, batch compression preserves recent results)
 
 ## 4. Built-in Tools
 
