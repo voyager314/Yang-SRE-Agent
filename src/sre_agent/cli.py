@@ -22,7 +22,9 @@ app = typer.Typer(name="sre-agent", help="AI-powered SRE agent for infrastructur
 console = Console()
 
 
-def _build_engine(config: Config, model_override: str | None = None) -> Engine:
+def _build_engine(
+    config: Config, model_override: str | None = None
+) -> tuple[Engine, str, ToolsetManager]:
     """根据配置组装模型、可用工具和执行引擎。
 
     返回值还包含渲染后的系统提示词和工具集管理器，供不同 CLI 子命令复用
@@ -97,7 +99,7 @@ def ask(
     ] = None,
 ):
     """对基础设施问题执行一次性调查。"""
-    config = Config(_config_file=str(config_file) if config_file else str(DEFAULT_CONFIG_FILE))
+    config = Config(_config_file=str(config_file) if config_file else str(DEFAULT_CONFIG_FILE)) # type: ignore
     engine, system_prompt, _mgr = _build_engine(config, model)
 
     # 将原始问题嵌入调查模板，使一次性模式也遵循统一的分析指引。
@@ -132,7 +134,7 @@ def chat(
     from prompt_toolkit import PromptSession
     from prompt_toolkit.history import InMemoryHistory
 
-    config = Config(_config_file=str(config_file) if config_file else str(DEFAULT_CONFIG_FILE))
+    config = Config(_config_file=str(config_file) if config_file else str(DEFAULT_CONFIG_FILE)) # type: ignore
     engine, system_prompt, _mgr = _build_engine(config, model)
 
     # 同一列表会在每轮调用中扩展，从而向模型提供完整会话和工具调用历史。
@@ -176,7 +178,7 @@ def toolset_list(
     ] = None,
 ):
     """列出工具集、工具数量以及前置条件检查状态。"""
-    config = Config(_config_file=str(config_file) if config_file else str(DEFAULT_CONFIG_FILE))
+    config = Config(_config_file=str(config_file) if config_file else str(DEFAULT_CONFIG_FILE)) # type: ignore
 
     toolset_config = {}
     for name, ts_cfg in config.toolsets.items():

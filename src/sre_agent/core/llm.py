@@ -93,7 +93,7 @@ class DefaultLLM(LLM):
         response = litellm.completion(**kwargs)
 
         # 引擎和测试只依赖普通字典，不直接泄漏 LiteLLM 的响应对象类型。
-        message = response.choices[0].message
+        message = response.choices[0].message # pyright: ignore[reportAttributeAccessIssue]
         tool_calls_raw = []
         if message.tool_calls:
             for tc in message.tool_calls:
@@ -133,6 +133,6 @@ class DefaultLLM(LLM):
 
         try:
             info = litellm.get_model_info(self.model)
-            return info.get("max_input_tokens", 128000) if info else 128000
+            return info.get("max_input_tokens", 128000) if info else 128000 # pyright: ignore[reportReturnType]
         except Exception:
             return 128000

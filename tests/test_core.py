@@ -235,3 +235,80 @@ class TestMultiTurnConversation:
         assert len(second_call_messages) == 4
         assert second_call_messages[2]["role"] == "assistant"
         assert "CrashLoopBackOff" in second_call_messages[2]["content"]
+
+
+class TestScratchpad:
+    def test_initial_state_empty(self):
+        from sre_agent.core.scratchpad import Scratchpad
+        sp = Scratchpad()
+        assert sp.is_empty()
+        assert sp.findings == []
+        assert sp.hypotheses == []
+        assert sp.ruled_out == []
+        assert sp.next_steps == []
+
+    def test_update_full_replace(self):
+        from sre_agent.core.scratchpad import Scratchpad
+        sp = Scratchpad(findings=["old finding"])
+        sp.update(findings=["new finding"], hypotheses=["h1"])
+        assert sp.findings == ["new finding"]
+        assert sp.hypotheses == ["h1"]
+        assert sp.ruled_out == []
+
+    def test_update_partial_preserves_unchanged_fields(self):
+        from sre_agent.core.scratchpad import Scratchpad
+        sp = Scratchpad(findings=["f1"], hypotheses=["h1"])
+        sp.update(ruled_out=["r1"])
+        assert sp.findings == ["f1"]
+        assert sp.hypotheses == ["h1"]
+        assert sp.ruled_out == ["r1"]
+
+    def test_is_empty_after_partial_update(self):
+        from sre_agent.core.scratchpad import Scratchpad
+        sp = Scratchpad()
+        sp.update(findings=["cpu spike"])
+        assert not sp.is_empty()
+
+    def test_to_yaml_contains_all_fields(self):
+        from sre_agent.core.scratchpad import Scratchpad
+        sp = Scratchpad(findings=["f1"], hypotheses=["h1"], ruled_out=["r1"], next_steps=["n1"])
+        out = sp.to_yaml()
+        assert "findings" in out
+        assert "hypotheses" in out
+        assert "ruled_out" in out
+        assert "next_steps" in out
+        assert "f1" in out
+
+    def test_to_yaml_empty_scratchpad(self):
+        from sre_agent.core.scratchpad import Scratchpad
+        sp = Scratchpad()
+        out = sp.to_yaml()
+        assert "findings" in out
+        assert "[]" in out
+
+
+class TestEvidenceStore:
+    def test_save_and_load_roundtrip(self, tmp_path):
+        from sre_agent.core.evidence_store import EvidenceStore
+        store = EvidenceStore(base_dir=tmp_path)
+        store.save("call_abc", "full output content")
+        result = store.load("call_abc")
+        assert result == "full output content"
+
+    def test_load_missing_returns_none(self, tmp_path):
+        from sre_agent.core.evidence_store import EvidenceStore
+        store = EvidenceStore(base_dir=tmp_path)
+        assert store.load("nonexistent_id") is None
+
+    def test_save_creates_base_dir(self, tmp_path):
+        from sre_agent.core.evidence_store import EvidenceStore
+        nested = tmp_path / "a" / "b" / "c"
+        store = EvidenceStore(base_dir=nested)
+        store.save("call_1", "data")
+        assert (nested / "call_1").exists()
+
+    def test_save_returns_path(self, tmp_path):
+        from sre_agent.core.evidence_store import EvidenceStore
+        store = EvidenceStore(base_dir=tmp_path)
+        path = store.save("call_xyz", "content")
+        assert path == tmp_path / "call_xyz"

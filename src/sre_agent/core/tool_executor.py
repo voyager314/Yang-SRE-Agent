@@ -107,7 +107,7 @@ def _parse_arguments(arguments: str | dict[str, Any]) -> dict[str, Any]:
     try:
         import json
         return json.loads(arguments)
-    except (json.JSONDecodeError, TypeError):
+    except (json.JSONDecodeError, TypeError): # pyright: ignore[reportPossiblyUnboundVariable]
         return {}
 
 
