@@ -312,3 +312,81 @@ class TestEvidenceStore:
         store = EvidenceStore(base_dir=tmp_path)
         path = store.save("call_xyz", "content")
         assert path == tmp_path / "call_xyz"
+
+
+class TestToolsetCompress:
+    def _make_long_output(self, n: int, prefix: str = "line") -> str:
+        return "\n".join(f"{prefix} {i}" for i in range(n))
+
+    def test_toolset_default_compress_short_passthrough(self):
+        from sre_agent.core.tool import Toolset
+        ts = Toolset(name="t", tools=[])
+        short = self._make_long_output(30)
+        assert ts.compress("t", short) == short
+
+    def test_toolset_default_compress_long_folds_middle(self):
+        from sre_agent.core.tool import Toolset
+        ts = Toolset(name="t", tools=[])
+        out = ts.compress("t", self._make_long_output(100))
+        assert "折叠" in out
+        assert "line 0" in out
+        assert "line 99" in out
+
+    def test_bash_compress_short_passthrough(self):
+        from sre_agent.toolsets.bash import create_bash_toolset
+        ts = create_bash_toolset({})
+        short = self._make_long_output(30)
+        assert ts.compress("bash", short) == short
+
+    def test_bash_compress_highlights_error_lines(self):
+        from sre_agent.toolsets.bash import create_bash_toolset
+        ts = create_bash_toolset({})
+        lines = [f"line {i}" for i in range(100)]
+        lines[10] = "ERROR: something went wrong"
+        lines[50] = "fatal: disk full"
+        out = ts.compress("bash", "\n".join(lines))
+        assert "ERROR: something went wrong" in out
+        assert "fatal: disk full" in out
+        assert "共 100 行" in out
+
+    def test_bash_compress_no_errors_keeps_tail(self):
+        from sre_agent.toolsets.bash import create_bash_toolset
+        ts = create_bash_toolset({})
+        lines = [f"line {i}" for i in range(100)]
+        out = ts.compress("bash", "\n".join(lines))
+        assert "line 99" in out
+
+    def test_prometheus_compress_short_passthrough(self):
+        from sre_agent.toolsets.prometheus import create_prometheus_toolset
+        ts = create_prometheus_toolset({"url": "http://localhost:9090"})
+        short = self._make_long_output(40)
+        assert ts.compress("prometheus_query", short) == short
+
+    def test_prometheus_compress_folds_time_points(self):
+        from sre_agent.toolsets.prometheus import create_prometheus_toolset
+        ts = create_prometheus_toolset({"url": "http://localhost:9090"})
+        lines = ['{job="api"}:']
+        lines += [f"  [ts{i}] {i * 0.1:.2f}" for i in range(100)]
+        out = ts.compress("prometheus_query_range", "\n".join(lines))
+        assert "折叠" in out
+
+    def test_logs_compress_short_passthrough(self):
+        import os
+        os.environ["LOKI_URL"] = "http://localhost:3100"
+        from sre_agent.toolsets.logs import create_logs_toolset
+        ts = create_logs_toolset({"url": "http://localhost:3100"})
+        short = self._make_long_output(40)
+        assert ts.compress("loki_query", short) == short
+
+    def test_logs_compress_surfaces_error_lines(self):
+        import os
+        os.environ["LOKI_URL"] = "http://localhost:3100"
+        from sre_agent.toolsets.logs import create_logs_toolset
+        ts = create_logs_toolset({"url": "http://localhost:3100"})
+        lines = [f"[ts] info line {i}" for i in range(80)]
+        lines[5] = "[ts] ERROR: null pointer"
+        lines[40] = "[ts] WARN: slow query 3200ms"
+        out = ts.compress("loki_query", "\n".join(lines))
+        assert "ERROR: null pointer" in out
+        assert "WARN: slow query" in out
+        assert "共 80 行" in out

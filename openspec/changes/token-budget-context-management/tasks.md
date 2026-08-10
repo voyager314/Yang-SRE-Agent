@@ -7,11 +7,11 @@
 
 ## 2. Toolset Compression
 
-- [ ] 2.1 Add `compress(tool_name: str, raw_output: str) -> str` method to `Toolset` base class with conservative default implementation (first 20 + last 5 lines + stats)
-- [ ] 2.2 Implement `compress()` in bash toolset: preserve exit code, stderr, error/warning lines from stdout
-- [ ] 2.3 Implement `compress()` in prometheus toolset: preserve query, time range, anomaly intervals, aggregated values
-- [ ] 2.4 Implement `compress()` in logs toolset: cluster by anomaly, preserve first/last occurrence, count, representative entries
-- [ ] 2.5 Add unit tests for each toolset's compress() with representative outputs
+- [x] 2.1 Add `compress(tool_name: str, raw_output: str) -> str` method to `Toolset` base class with conservative default implementation (first 20 + last 5 lines + stats)
+- [x] 2.2 Implement `compress()` in bash toolset: preserve exit code, stderr, error/warning lines from stdout
+- [x] 2.3 Implement `compress()` in prometheus toolset: preserve query, time range, anomaly intervals, aggregated values
+- [x] 2.4 Implement `compress()` in logs toolset: cluster by anomaly, preserve first/last occurrence, count, representative entries
+- [x] 2.5 Add unit tests for each toolset's compress() with representative outputs
 
 ## 3. Context Manager
 

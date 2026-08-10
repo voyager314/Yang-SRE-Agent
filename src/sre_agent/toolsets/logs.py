@@ -143,13 +143,11 @@ def _format_es_results(hits: list[dict[str, Any]]) -> str:
 def create_logs_toolset(config: dict[str, Any]) -> Toolset | None:
     """根据显式 provider、URL 特征和环境变量选择日志后端。"""
 
-    # 延迟导入使模块加载本身不依赖进程环境，方便单元测试和复用。
     import os
 
     provider = config.get("provider", "loki")
     url = config.get("url") or os.environ.get("LOKI_URL") or os.environ.get("ELASTICSEARCH_URL")
     if not url:
-        # 返回不可用工具集而非 None，使 CLI 能显示清晰的缺失配置原因。
         return Toolset(
             name="logs",
             tools=[],
@@ -157,8 +155,33 @@ def create_logs_toolset(config: dict[str, Any]) -> Toolset | None:
             llm_instructions="Log system is not configured.",
         )
 
+    class LogsToolset(Toolset):
+        def compress(self, tool_name: str, raw_output: str) -> str:
+            """优先保留 ERROR/WARN 行，其余保留末尾 30 行。"""
+
+            lines = raw_output.split("\n")
+            total = len(lines)
+            if total <= 60:
+                return raw_output
+
+            error_keywords = ("error", "warn", "fatal", "exception", "panic", "critical")
+            signal_lines = [
+                l for l in lines
+                if any(kw in l.lower() for kw in error_keywords)
+            ]
+            tail = lines[-30:]
+
+            parts: list[str] = [f"[共 {total} 行，已压缩]"]
+            if signal_lines:
+                parts.append("--- ERROR/WARN 行 ---")
+                parts.extend(signal_lines[:40])
+                if len(signal_lines) > 40:
+                    parts.append(f"  ... 另有 {len(signal_lines) - 40} 条异常日志")
+            parts.append("--- 最近日志 ---")
+            parts.extend(tail)
+            return "\n".join(parts)
+
     tools: list[Tool] = []
-    # provider 明确指定时优先使用；URL 特征用于零配置自动识别。
     if provider == "loki" or "loki" in url.lower():
         tools.append(LokiQueryTool(url))
         instructions = (
@@ -176,7 +199,7 @@ def create_logs_toolset(config: dict[str, Any]) -> Toolset | None:
         tools.append(LokiQueryTool(url))
         instructions = "You have access to a log system via LogQL."
 
-    return Toolset(
+    return LogsToolset(
         name="logs",
         tools=tools,
         prerequisites=[],

@@ -227,6 +227,26 @@ class Toolset:
         self._status_message = ""
         return True
 
+    def compress(self, tool_name: str, raw_output: str) -> str:
+        """将超长工具输出压缩为模型仍可决策的最小摘要。
+
+        默认实现保留首尾各 20 行并折叠中间；子类可根据领域知识提供更精准的压缩。
+        约定：返回值必须是纯文本，完整原文已由引擎持久化，此处只需保留诊断关键信息。
+        """
+
+        lines = raw_output.split("\n")
+        total = len(lines)
+        if total <= 50:
+            return raw_output
+        head = lines[:20]
+        tail = lines[-20:]
+        omitted = total - 40
+        return (
+            "\n".join(head)
+            + f"\n... [{omitted} 行已折叠，完整输出见证据库] ...\n"
+            + "\n".join(tail)
+        )
+
 
 class YAMLTool(Tool):
     """从 YAML 声明构建的 shell 工具。

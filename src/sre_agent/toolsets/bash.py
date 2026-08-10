@@ -67,8 +67,38 @@ class BashTool(Tool):
 def create_bash_toolset(config: dict[str, Any]) -> Toolset:
     """使用配置中的超时创建 Bash 工具集。"""
 
+    from sre_agent.core.tool import Prerequisite, PrerequisiteStatus
+
     timeout = config.get("timeout", 60.0)
-    return Toolset(
+
+    class BashToolset(Toolset):
+        def compress(self, tool_name: str, raw_output: str) -> str:
+            """保留错误行和末尾输出；中间的重复信息折叠。"""
+
+            lines = raw_output.split("\n")
+            total = len(lines)
+            if total <= 50:
+                return raw_output
+
+            error_keywords = ("error", "fatal", "exception", "traceback", "panic", "failed")
+            error_lines = [
+                (i, l) for i, l in enumerate(lines)
+                if any(kw in l.lower() for kw in error_keywords)
+            ]
+            tail = lines[-30:]
+
+            parts: list[str] = [f"[共 {total} 行，已压缩]"]
+            if error_lines:
+                parts.append("--- 异常行 ---")
+                for idx, l in error_lines[:20]:
+                    parts.append(f"  L{idx + 1}: {l}")
+                if len(error_lines) > 20:
+                    parts.append(f"  ... 另有 {len(error_lines) - 20} 处异常")
+            parts.append("--- 末尾输出 ---")
+            parts.extend(tail)
+            return "\n".join(parts)
+
+    return BashToolset(
         name="bash",
         tools=[BashTool(timeout=timeout)],
         prerequisites=[],

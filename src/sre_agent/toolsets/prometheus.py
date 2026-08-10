@@ -181,7 +181,6 @@ def create_prometheus_toolset(config: dict[str, Any]) -> Toolset | None:
 
     url = config.get("url") or config.get("prometheus_url") or os.environ.get("PROMETHEUS_URL")
     if not url:
-        # 保留不可用条目，让状态命令能够提示用户设置 PROMETHEUS_URL。
         return Toolset(
             name="prometheus",
             tools=[],
@@ -189,12 +188,43 @@ def create_prometheus_toolset(config: dict[str, Any]) -> Toolset | None:
             llm_instructions="Prometheus is not configured.",
         )
 
+    class PrometheusToolset(Toolset):
+        def compress(self, tool_name: str, raw_output: str) -> str:
+            """保留所有指标序列，折叠每条序列超出的时间点。
+
+            Prometheus 输出由 _format_results() 格式化，每行是一个时间点或序列头；
+            序列数量通常有限，压缩重点是长时间范围查询产生的密集时间点。
+            """
+
+            lines = raw_output.split("\n")
+            total = len(lines)
+            if total <= 80:
+                return raw_output
+
+            # 按序列头（不以空格开头）分组，每组最多保留 5 个时间点
+            compressed: list[str] = [f"[共 {total} 行，时间点已压缩]"]
+            current_series: list[str] = []
+            for line in lines:
+                if line and not line.startswith(" "):
+                    if current_series:
+                        compressed.extend(current_series[:5])
+                        if len(current_series) > 5:
+                            compressed.append(f"  ... ({len(current_series) - 5} 个时间点已折叠)")
+                    current_series = [line]
+                else:
+                    current_series.append(line)
+            if current_series:
+                compressed.extend(current_series[:5])
+                if len(current_series) > 5:
+                    compressed.append(f"  ... ({len(current_series) - 5} 个时间点已折叠)")
+            return "\n".join(compressed)
+
     tools = [
         PrometheusQueryTool(url),
         PrometheusRangeQueryTool(url),
     ]
 
-    return Toolset(
+    return PrometheusToolset(
         name="prometheus",
         tools=tools,
         prerequisites=[],
