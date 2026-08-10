@@ -166,8 +166,7 @@ def create_logs_toolset(config: dict[str, Any]) -> Toolset | None:
 
             error_keywords = ("error", "warn", "fatal", "exception", "panic", "critical")
             signal_lines = [
-                l for l in lines
-                if any(kw in l.lower() for kw in error_keywords)
+                line for line in lines if any(kw in line.lower() for kw in error_keywords)
             ]
             tail = lines[-30:]
 
@@ -186,8 +185,8 @@ def create_logs_toolset(config: dict[str, Any]) -> Toolset | None:
         tools.append(LokiQueryTool(url))
         instructions = (
             "You have access to Loki for log queries using LogQL.\n"
-            "Common patterns: {app=\"name\"} |= \"error\", "
-            "{namespace=\"prod\"} | json | level=\"error\""
+            'Common patterns: {app="name"} |= "error", '
+            '{namespace="prod"} | json | level="error"'
         )
     elif provider == "elasticsearch" or "elastic" in url.lower():
         tools.append(ElasticsearchQueryTool(url))

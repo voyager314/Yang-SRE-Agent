@@ -51,4 +51,4 @@ class Scratchpad:
             "ruled_out": self.ruled_out,
             "next_steps": self.next_steps,
         }
-        return yaml.dump(data, allow_unicode=True, default_flow_style=False, sort_keys=False)
+        return str(yaml.dump(data, allow_unicode=True, default_flow_style=False, sort_keys=False))

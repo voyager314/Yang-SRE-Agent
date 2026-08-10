@@ -21,8 +21,7 @@ class BashTool(Tool):
         super().__init__(
             name="bash",
             description=(
-                "Execute a bash command. Use for any system command"
-                " not covered by other tools."
+                "Execute a bash command. Use for any system command not covered by other tools."
             ),
             parameters={
                 "type": "object",
@@ -67,8 +66,6 @@ class BashTool(Tool):
 def create_bash_toolset(config: dict[str, Any]) -> Toolset:
     """使用配置中的超时创建 Bash 工具集。"""
 
-    from sre_agent.core.tool import Prerequisite, PrerequisiteStatus
-
     timeout = config.get("timeout", 60.0)
 
     class BashToolset(Toolset):
@@ -82,16 +79,17 @@ def create_bash_toolset(config: dict[str, Any]) -> Toolset:
 
             error_keywords = ("error", "fatal", "exception", "traceback", "panic", "failed")
             error_lines = [
-                (i, l) for i, l in enumerate(lines)
-                if any(kw in l.lower() for kw in error_keywords)
+                (i, line)
+                for i, line in enumerate(lines)
+                if any(kw in line.lower() for kw in error_keywords)
             ]
             tail = lines[-30:]
 
             parts: list[str] = [f"[共 {total} 行，已压缩]"]
             if error_lines:
                 parts.append("--- 异常行 ---")
-                for idx, l in error_lines[:20]:
-                    parts.append(f"  L{idx + 1}: {l}")
+                for idx, line in error_lines[:20]:
+                    parts.append(f"  L{idx + 1}: {line}")
                 if len(error_lines) > 20:
                     parts.append(f"  ... 另有 {len(error_lines) - 20} 处异常")
             parts.append("--- 末尾输出 ---")

@@ -52,9 +52,7 @@ def _build_engine(
 
     # tool_name → Toolset mapping for compress() dispatch
     tool_to_toolset = {
-        tool.name: toolset
-        for toolset in mgr.get_available_toolsets()
-        for tool in toolset.tools
+        tool.name: toolset for toolset in mgr.get_available_toolsets() for tool in toolset.tools
     }
 
     evidence_store = EvidenceStore()
@@ -71,13 +69,17 @@ def _build_engine(
     available_toolsets = mgr.get_available_toolsets()
     system_prompt = load_prompt("system", {"toolsets": available_toolsets})
 
-    return Engine(
-        llm=llm,
-        tool_executor=executor,
-        max_steps=config.max_steps,
-        max_output_lines=config.max_tool_output_lines,
-        context_manager=context_manager,
-    ), system_prompt, mgr
+    return (
+        Engine(
+            llm=llm,
+            tool_executor=executor,
+            max_steps=config.max_steps,
+            max_output_lines=config.max_tool_output_lines,
+            context_manager=context_manager,
+        ),
+        system_prompt,
+        mgr,
+    )
 
 
 def _render_stream(engine: Engine, messages: list[dict]) -> str:
@@ -108,15 +110,13 @@ def _render_stream(engine: Engine, messages: list[dict]) -> str:
 @app.command()
 def ask(
     question: Annotated[str, typer.Argument(help="Question or issue to investigate")],
-    model: Annotated[
-        str | None, typer.Option("--model", "-m", help="Model to use")
-    ] = None,
+    model: Annotated[str | None, typer.Option("--model", "-m", help="Model to use")] = None,
     config_file: Annotated[
         Path | None, typer.Option("--config", "-c", help="Config file path")
     ] = None,
 ):
     """对基础设施问题执行一次性调查。"""
-    config = Config(_config_file=str(config_file) if config_file else str(DEFAULT_CONFIG_FILE)) # type: ignore
+    config = Config(_config_file=str(config_file) if config_file else str(DEFAULT_CONFIG_FILE))  # type: ignore
     engine, system_prompt, _mgr = _build_engine(config, model)
 
     # 将原始问题嵌入调查模板，使一次性模式也遵循统一的分析指引。
@@ -138,9 +138,7 @@ def ask(
 
 @app.command()
 def chat(
-    model: Annotated[
-        str | None, typer.Option("--model", "-m", help="Model to use")
-    ] = None,
+    model: Annotated[str | None, typer.Option("--model", "-m", help="Model to use")] = None,
     config_file: Annotated[
         Path | None, typer.Option("--config", "-c", help="Config file path")
     ] = None,
@@ -151,18 +149,20 @@ def chat(
     from prompt_toolkit import PromptSession
     from prompt_toolkit.history import InMemoryHistory
 
-    config = Config(_config_file=str(config_file) if config_file else str(DEFAULT_CONFIG_FILE)) # type: ignore
+    config = Config(_config_file=str(config_file) if config_file else str(DEFAULT_CONFIG_FILE))  # type: ignore
     engine, system_prompt, _mgr = _build_engine(config, model)
 
     # 同一列表会在每轮调用中扩展，从而向模型提供完整会话和工具调用历史。
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
     session: PromptSession = PromptSession(history=InMemoryHistory())
 
-    console.print(Panel(
-        "Interactive SRE Agent session. Type your questions, 'exit' or Ctrl+D to quit.",
-        title="[bold]SRE Agent Chat[/bold]",
-        border_style="blue",
-    ))
+    console.print(
+        Panel(
+            "Interactive SRE Agent session. Type your questions, 'exit' or Ctrl+D to quit.",
+            title="[bold]SRE Agent Chat[/bold]",
+            border_style="blue",
+        )
+    )
 
     while True:
         try:
@@ -195,7 +195,7 @@ def toolset_list(
     ] = None,
 ):
     """列出工具集、工具数量以及前置条件检查状态。"""
-    config = Config(_config_file=str(config_file) if config_file else str(DEFAULT_CONFIG_FILE)) # type: ignore
+    config = Config(_config_file=str(config_file) if config_file else str(DEFAULT_CONFIG_FILE))  # type: ignore
 
     toolset_config = {}
     for name, ts_cfg in config.toolsets.items():

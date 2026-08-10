@@ -48,7 +48,7 @@
 
 ## 7. Validation & Polish
 
-- [ ] 7.1 Run full test suite, fix any regressions from engine refactor
-- [ ] 7.2 Run ruff check and ruff format
-- [ ] 7.3 Run mypy strict type checks, resolve new type errors
-- [ ] 7.4 Manual smoke test: run `sre-agent ask` with a diagnostic question, verify compression and scratchpad behavior in verbose/debug output
+- [x] 7.1 Run full test suite, fix any regressions from engine refactor
+- [x] 7.2 Run ruff check and ruff format
+- [x] 7.3 Run mypy strict type checks, resolve new type errors (13 pre-existing errors in unchanged files unchanged; 0 new errors introduced)
+- [x] 7.4 Manual smoke test: run `sre-agent ask` with a diagnostic question, verify compression and scratchpad behavior in verbose/debug output

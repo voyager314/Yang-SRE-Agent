@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from .evidence_store import EvidenceStore
@@ -14,7 +14,7 @@ _IMMEDIATE_CHAR_THRESHOLD = 16_000  # ~4K tokens at 4 chars/token
 _RECENT_CALLS_TO_KEEP = 5
 
 
-class BudgetStatus(str, Enum):
+class BudgetStatus(StrEnum):
     NORMAL = "normal"
     COMPRESS = "compress"
     CONVERGE = "converge"
@@ -92,9 +92,7 @@ class ContextManager:
         messages: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         """压缩旧 tool 消息中较大的内容，保留最近 N 条 tool 调用不变。"""
-        tool_indices = [
-            i for i, m in enumerate(messages) if m.get("role") == "tool"
-        ]
+        tool_indices = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
         recent_set = set(tool_indices[-_RECENT_CALLS_TO_KEEP:])
 
         result: list[dict[str, Any]] = []
@@ -114,6 +112,7 @@ class ContextManager:
 # ------------------------------------------------------------------
 # 内部辅助
 # ------------------------------------------------------------------
+
 
 def _default_compress(text: str, head: int = 20, tail: int = 5) -> str:
     lines = text.splitlines()

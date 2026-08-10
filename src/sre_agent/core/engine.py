@@ -14,10 +14,7 @@ from sre_agent.core.tool import Tool
 from sre_agent.core.tool_executor import ToolExecutor, _format_result_for_llm
 from sre_agent.utils.streaming import StreamEvent, StreamEventType
 
-_CONVERGE_PROMPT = (
-    "上下文预算已接近上限。请立即根据现有调查结果给出最终结论，"
-    "不要再调用任何工具。"
-)
+_CONVERGE_PROMPT = "上下文预算已接近上限。请立即根据现有调查结果给出最终结论，不要再调用任何工具。"
 
 
 class EngineResult(BaseModel):
@@ -57,6 +54,7 @@ class Engine:
         self._builtin_map: dict[str, Tool] = {}
         if context_manager is not None:
             from sre_agent.core.builtin_tools import make_builtin_tools
+
             self._builtin_tools = make_builtin_tools(
                 context_manager.scratchpad, context_manager.evidence_store
             )
@@ -86,9 +84,7 @@ class Engine:
             converged=converged,
         )
 
-    def call_stream(
-        self, messages: list[dict[str, Any]]
-    ) -> Generator[StreamEvent]:
+    def call_stream(self, messages: list[dict[str, Any]]) -> Generator[StreamEvent]:
         """逐步产出调查事件，供 CLI 等调用方实时展示执行进度。"""
 
         cm = self.context_manager
@@ -143,20 +139,20 @@ class Engine:
                     },
                 )
 
-            messages.append({
-                "role": "assistant",
-                "content": response.content,
-                "tool_calls": response.tool_calls,
-            })
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": response.content,
+                    "tool_calls": response.tool_calls,
+                }
+            )
 
             # 5.4: route tool calls — builtin executed synchronously, external in parallel
             builtin_calls = [
-                tc for tc in response.tool_calls
-                if tc["function"]["name"] in self._builtin_map
+                tc for tc in response.tool_calls if tc["function"]["name"] in self._builtin_map
             ]
             external_calls = [
-                tc for tc in response.tool_calls
-                if tc["function"]["name"] not in self._builtin_map
+                tc for tc in response.tool_calls if tc["function"]["name"] not in self._builtin_map
             ]
 
             id_to_name = {tc["id"]: tc["function"]["name"] for tc in response.tool_calls}
@@ -256,9 +252,8 @@ def _inject_scratchpad(
     if effective and effective[0].get("role") == "system":
         sys_msg = dict(effective[0])
         sys_msg["content"] = (
-            (sys_msg.get("content") or "")
-            + f"\n\n## 当前调查记录\n{cm.scratchpad.to_yaml()}"
-        )
+            sys_msg.get("content") or ""
+        ) + f"\n\n## 当前调查记录\n{cm.scratchpad.to_yaml()}"
         effective[0] = sys_msg
     return effective
 

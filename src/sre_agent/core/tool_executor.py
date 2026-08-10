@@ -83,11 +83,13 @@ class ToolExecutor:
             for future in concurrent.futures.as_completed(future_to_call):
                 call = future_to_call[future]
                 result = future.result()
-                results.append({
-                    "tool_call_id": call["id"],
-                    "role": "tool",
-                    "content": _format_result_for_llm(result),
-                })
+                results.append(
+                    {
+                        "tool_call_id": call["id"],
+                        "role": "tool",
+                        "content": _format_result_for_llm(result),
+                    }
+                )
 
         # as_completed 按完成时间产出结果，此处恢复模型声明的调用顺序。
         call_order = {call["id"]: i for i, call in enumerate(calls)}
@@ -106,8 +108,9 @@ def _parse_arguments(arguments: str | dict[str, Any]) -> dict[str, Any]:
         return arguments
     try:
         import json
+
         return json.loads(arguments)
-    except (json.JSONDecodeError, TypeError): # pyright: ignore[reportPossiblyUnboundVariable]
+    except (json.JSONDecodeError, TypeError):  # pyright: ignore[reportPossiblyUnboundVariable]
         return {}
 
 
