@@ -1,0 +1,55 @@
+"""文本嵌入向量生成的抽象接口及基于 sentence-transformers 的默认实现。"""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+
+
+class Embedder(ABC):
+    """将文本转换为稠密向量的适配器协议。
+
+    新增嵌入模型实现时只需实现该接口，MemoryStore 无需了解具体模型或推理框架。
+    """
+
+    @abstractmethod
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        """将文本列表转换为对应的嵌入向量列表。
+
+        返回值长度与输入列表一致，每个向量的维度取决于所用模型。
+        """
+
+        ...
+
+
+class SentenceTransformerEmbedder(Embedder):
+    """通过 sentence-transformers 加载本地模型生成嵌入向量。
+
+    模型在首次调用 :meth:`embed` 时延迟加载，避免未使用 memory 功能时
+    承担约 3GB 的模型加载开销。
+    """
+
+    def __init__(self, model_name: str = "Alibaba-NLP/gte-Qwen2-1.5B-instruct") -> None:
+        self._model_name = model_name
+        self._model: object | None = None
+
+    def _load_model(self) -> None:
+        """加载 sentence-transformers 模型，首次运行时自动从 HuggingFace 下载。"""
+
+        from sentence_transformers import SentenceTransformer
+
+        self._model = SentenceTransformer(self._model_name, trust_remote_code=True)
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        """将文本列表编码为嵌入向量。
+
+        首次调用时触发模型加载（含可能的网络下载），后续调用直接使用已加载的模型。
+        """
+
+        if self._model is None:
+            self._load_model()
+
+        from sentence_transformers import SentenceTransformer
+
+        assert isinstance(self._model, SentenceTransformer)
+        embeddings = self._model.encode(texts, convert_to_numpy=True)
+        return [vec.tolist() for vec in embeddings]

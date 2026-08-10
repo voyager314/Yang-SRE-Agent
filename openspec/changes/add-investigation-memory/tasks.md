@@ -5,8 +5,8 @@
 
 ## 2. Embedder Module
 
-- [ ] 2.1 Create `src/sre_agent/core/embedder.py` with `Embedder` ABC defining `embed(texts: list[str]) -> list[list[float]]`
-- [ ] 2.2 Implement `SentenceTransformerEmbedder` in the same file: lazy-load model on first `embed()` call, use `trust_remote_code=True`, return 1536-dim vectors for the default model
+- [x] 2.1 Create `src/sre_agent/core/embedder.py` with `Embedder` ABC defining `embed(texts: list[str]) -> list[list[float]]`
+- [x] 2.2 Implement `SentenceTransformerEmbedder` in the same file: lazy-load model on first `embed()` call, use `trust_remote_code=True`, return 1536-dim vectors for the default model
 
 ## 3. Investigation Summary Data Model
 
