@@ -10,9 +10,9 @@
 
 ## 3. Investigation Summary Data Model
 
-- [ ] 3.1 Create `src/sre_agent/core/memory_store.py` with `InvestigationSummary` Pydantic model containing fields: id, question, conclusion, root_cause, resolution, tools_used, key_evidence, tags, timestamp, evidence_refs, converged
-- [ ] 3.2 Implement `InvestigationSummary.to_embedding_text()` that concatenates question, conclusion, and key_evidence for embedding input
-- [ ] 3.3 Implement `InvestigationSummary.to_chroma_metadata()` that returns tools_used, tags, timestamp, converged as a flat metadata dict for ChromaDB
+- [x] 3.1 Create `src/sre_agent/core/memory_store.py` with `InvestigationSummary` Pydantic model containing fields: id, question, conclusion, root_cause, resolution, tools_used, key_evidence, tags, timestamp, evidence_refs, converged
+- [x] 3.2 Implement `InvestigationSummary.to_embedding_text()` that concatenates question, conclusion, and key_evidence for embedding input
+- [x] 3.3 Implement `InvestigationSummary.to_chroma_metadata()` that returns tools_used, tags, timestamp, converged as a flat metadata dict for ChromaDB
 
 ## 4. Extraction Prompt
 
