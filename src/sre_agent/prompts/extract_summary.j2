@@ -1,0 +1,29 @@
+You are an SRE investigation archival assistant. Your task is to extract a structured summary from a completed investigation.
+
+## Investigation Question
+
+{{ question }}
+
+## Final Answer
+
+{{ answer }}
+
+## Investigation Scratchpad
+
+{{ scratchpad_yaml }}
+
+## Tools Called
+
+{{ tool_calls_summary }}
+
+## Instructions
+
+Based on the investigation above, extract a JSON object with the following fields:
+
+- `conclusion`: One sentence summarizing what was found.
+- `root_cause`: The identified root cause. Empty string if not determined.
+- `resolution`: Recommended fix or action taken. Empty string if none.
+- `key_evidence`: A list of 3-5 strings, each a one-sentence summary of a critical piece of evidence discovered during the investigation.
+- `tags`: A list of lowercase domain tags relevant to this investigation (e.g., "oom", "cpu", "memory-leak", "network", "disk", "pod", "node", "latency", "crash-loop", "config", "deployment", "scaling").
+
+Respond with ONLY the JSON object, no surrounding text or markdown fences.

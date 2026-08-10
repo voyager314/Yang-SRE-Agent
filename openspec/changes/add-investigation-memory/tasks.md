@@ -16,7 +16,7 @@
 
 ## 4. Extraction Prompt
 
-- [ ] 4.1 Create `src/sre_agent/prompts/extract_summary.j2` with SRE-domain-specialized extraction prompt template accepting question, answer, scratchpad_yaml, and tool_calls_summary variables, instructing the LLM to return JSON with conclusion, root_cause, resolution, key_evidence, and tags fields
+- [x] 4.1 Create `src/sre_agent/prompts/extract_summary.j2` with SRE-domain-specialized extraction prompt template accepting question, answer, scratchpad_yaml, and tool_calls_summary variables, instructing the LLM to return JSON with conclusion, root_cause, resolution, key_evidence, and tags fields
 
 ## 5. MemoryStore Core
 
