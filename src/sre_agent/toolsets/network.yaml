@@ -1,37 +1,46 @@
 name: network
+# 这段说明会注入模型上下文，用于约束网络工具的适用场景和安全边界。
 llm_instructions: |
   You have access to network diagnostic tools.
   Use these to troubleshoot DNS resolution, TCP connectivity, HTTP endpoint health, and routing.
   All host/domain parameters are validated to prevent shell injection.
 
 tools:
+  # DNS 查询只输出 answer 区域，减少 dig 的状态信息占用模型上下文。
   - name: dns_lookup
     description: "Resolve DNS records for a domain (A, AAAA, CNAME, MX, TXT, etc.)"
     command: "dig +noall +answer {{ domain }} {{ type | default('A') }}"
     timeout: 15
+    # domain 会在模板渲染前经过受控 hostname 正则校验，阻断 shell 元字符。
     param_validators:
       domain: hostname
+    # 运行机器缺少 dig 时，由前置检查将该工具标记为不可用。
     prerequisites:
       - command: "which dig"
 
+  # nc 使用固定的连接超时，并把退出状态转换成明确的 OPEN/CLOSED 文本。
   - name: port_check
     description: "Check TCP port connectivity to a host (returns success/failure with timing)"
     command: "nc -z -w 5 {{ host }} {{ port }} 2>&1 && echo 'PORT_OPEN' || echo 'PORT_CLOSED'"
     timeout: 10
+    # host 接受域名和 IP；port 作为独立模板参数由 nc 解释。
     param_validators:
       host: hostname
     prerequisites:
       - command: "which nc"
 
+  # curl 丢弃响应体，只保留状态码、DNS/连接/总耗时和下载大小。
   - name: http_check
     description: "Check HTTP endpoint health, returning status code, response time, and size"
     command: "curl -s -o /dev/null -w 'status_code: %{http_code}\\ntime_total: %{time_total}s\\ntime_connect: %{time_connect}s\\ntime_dns: %{time_namelookup}s\\nsize: %{size_download} bytes' --max-time 10 '{{ url }}'"
     timeout: 15
+    # URL 参数在进入单引号包裹的命令模板前仍需执行字符白名单校验。
     param_validators:
       url: hostname
     prerequisites:
       - command: "which curl"
 
+  # 限制最大 20 跳、单跳等待 3 秒，外层 60 秒是整个进程的硬超时。
   - name: traceroute
     description: "Trace network route to a host, showing each hop with latency"
     command: "traceroute -m 20 -w 3 {{ host }}"

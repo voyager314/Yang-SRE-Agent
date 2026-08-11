@@ -36,8 +36,10 @@ class PrometheusQueryTool(Tool):
     def _invoke(self, params: dict[str, Any]) -> StructuredToolResult:
         """执行查询，并统一处理协议错误、HTTP 错误和连接错误。"""
 
+        # Tool.invoke 已经完成 schema 类型转换，这里只取必填的 PromQL 字符串。
         query = params["query"]
         try:
+            # 使用 Prometheus 的 instant query 端点；httpx 负责 URL 编码 query 参数。
             resp = httpx.get(
                 f"{self.base_url}/api/v1/query",
                 params={"query": query},
@@ -45,11 +47,13 @@ class PrometheusQueryTool(Tool):
             )
             resp.raise_for_status()
             data = resp.json()
+            # HTTP 200 不代表 PromQL 成功，必须同时检查响应体中的业务 status。
             if data.get("status") != "success":
                 return StructuredToolResult(
                     status=ToolResultStatus.ERROR,
                     error=data.get("error", "Query failed"),
                 )
+            # Prometheus 在 data.result 中返回 vector/matrix；缺少结果表示没有匹配序列。
             results = data.get("data", {}).get("result", [])
             if not results:
                 return StructuredToolResult(status=ToolResultStatus.NO_DATA)
@@ -110,6 +114,7 @@ class PrometheusRangeQueryTool(Tool):
         end_ts = parse_relative_time(end, now) if end != "now" else now
 
         try:
+            # query_range 接受 Unix 秒级时间戳，step 则保留 Prometheus 的字符串格式。
             resp = httpx.get(
                 f"{self.base_url}/api/v1/query_range",
                 params={"query": query, "start": start_ts, "end": end_ts, "step": step},
@@ -117,6 +122,7 @@ class PrometheusRangeQueryTool(Tool):
             )
             resp.raise_for_status()
             data = resp.json()
+            # 与即时查询相同，同时区分协议错误、空结果和正常结果。
             if data.get("status") != "success":
                 return StructuredToolResult(
                     status=ToolResultStatus.ERROR,
@@ -140,14 +146,18 @@ class PrometheusRangeQueryTool(Tool):
 def _format_results(results: list[dict[str, Any]]) -> str:
     """格式化 Prometheus vector/matrix，并限制每条序列为最近十个点。"""
 
+    # 每条序列先打印标签，再打印值；这种纯文本布局便于模型比较多条指标。
     lines: list[str] = []
     for r in results:
         metric = r.get("metric", {})
+        # 保留 Prometheus 原始标签名和值，避免丢失区分序列所需的信息。
         label_str = ", ".join(f'{k}="{v}"' for k, v in metric.items())
         if "value" in r:
+            # instant query 返回 [timestamp, value] 的单点 vector。
             ts, val = r["value"]
             lines.append(f"{{{label_str}}} => {val}")
         elif "values" in r:
+            # range query 返回多个点；只保留尾部，优先展示最新观测值。
             lines.append(f"{{{label_str}}}:")
             # 防止高分辨率范围查询产生过长提示词，同时报告总点数供判断。
             for ts, val in r["values"][-10:]:
@@ -162,6 +172,7 @@ def create_prometheus_toolset(config: dict[str, Any]) -> Toolset | None:
 
     import os
 
+    # 配置文件优先，兼容旧的 prometheus_url 键，最后才读取环境变量。
     url = config.get("url") or config.get("prometheus_url") or os.environ.get("PROMETHEUS_URL")
     if not url:
         return Toolset(
@@ -202,6 +213,7 @@ def create_prometheus_toolset(config: dict[str, Any]) -> Toolset | None:
                     compressed.append(f"  ... ({len(current_series) - 5} 个时间点已折叠)")
             return "\n".join(compressed)
 
+    # 两个工具共享同一个规范化后的 base URL，避免重复管理客户端配置。
     tools = [
         PrometheusQueryTool(url),
         PrometheusRangeQueryTool(url),

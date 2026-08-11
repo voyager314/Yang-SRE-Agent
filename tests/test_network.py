@@ -16,6 +16,7 @@ NETWORK_YAML = Path(__file__).resolve().parent.parent / "src" / "sre_agent" / "t
 
 @pytest.fixture
 def network_tools():
+    # 直接走生产 YAML 解析路径，确保测试覆盖声明内容到 YAMLTool 的真实映射。
     with open(NETWORK_YAML) as f:
         data = yaml.safe_load(f)
     manager = ToolsetManager()
@@ -23,6 +24,7 @@ def network_tools():
     return {t.name: t for t in tools}
 
 
+# 恶意输入集合覆盖命令分隔、管道、命令替换、换行和后台执行等 shell 注入入口。
 class TestParamValidatorsRejectInjection:
     MALICIOUS_INPUTS = [
         "example.com; rm -rf /",
@@ -57,6 +59,7 @@ class TestParamValidatorsRejectInjection:
         assert "invalid characters" in result.error
 
 
+# 正向集合覆盖域名、IPv4、IPv6、localhost 和带连字符主机名，防止规则过严。
 class TestParamValidatorsAcceptValid:
     VALID_INPUTS = [
         "api.prod.internal",
@@ -82,6 +85,7 @@ class TestParamValidatorsAcceptValid:
         assert result.status != ToolResultStatus.ERROR or "invalid characters" not in (result.error or "")
 
 
+# 装载测试固定工具数量/名称，并确认所有接收主机参数的工具声明了 validator。
 class TestNetworkYAMLLoading:
     def test_all_tools_loaded(self, network_tools):
         assert "dns_lookup" in network_tools

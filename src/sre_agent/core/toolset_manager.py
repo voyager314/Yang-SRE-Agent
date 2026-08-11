@@ -98,6 +98,7 @@ class ToolsetManager:
 
         tools: list[Tool] = []
         for td in tools_data:
+            # param_validators 原样传给 YAMLTool，由受控注册表解释具体校验规则。
             tool = YAMLTool(
                 name=td["name"],
                 description=td.get("description", ""),

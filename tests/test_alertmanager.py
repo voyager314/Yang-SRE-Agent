@@ -13,6 +13,7 @@ from sre_agent.toolsets.alertmanager import (
 from sre_agent.core.tool import ToolResultStatus
 
 
+# 告警工厂生成最小合法 API 结构，测试可通过参数只改变分组或展示所需字段。
 def _make_alert(alertname="TestAlert", severity="warning", namespace="default",
                 pod="", message="something went wrong"):
     alert = {
@@ -24,6 +25,7 @@ def _make_alert(alertname="TestAlert", severity="warning", namespace="default",
     return alert
 
 
+# 静默工厂集中描述 matcher/status 元数据，避免各测试重复拼装嵌套字典。
 def _make_silence(matcher_name="alertname", matcher_value="TestAlert",
                   created_by="admin", comment="maintenance", state="active"):
     return {
@@ -36,6 +38,7 @@ def _make_silence(matcher_name="alertname", matcher_value="TestAlert",
     }
 
 
+# 告警格式化测试覆盖严重级别排序、数量、核心标签、可选字段和未知级别。
 class TestAlertFormatting:
     def test_group_by_severity(self):
         alerts = [
@@ -83,6 +86,7 @@ class TestAlertFormatting:
         assert "[PAGE]" in result
 
 
+# matcher 的等值/否定/正则组合对应四类操作符，分别通过输出文本固定行为。
 class TestSilenceFormatting:
     def test_basic_silence(self):
         silences = [_make_silence("alertname", "HighCPU", "oncall", "planned work")]
@@ -114,6 +118,7 @@ class TestSilenceFormatting:
         assert "namespace=B" in result
 
 
+# 压缩测试验证 50 行边界、按 alertname 去重计数以及代表样例保留。
 class TestCompressLogic:
     def test_short_output_not_compressed(self):
         output = "\n".join([f"line {i}" for i in range(30)])
@@ -149,6 +154,7 @@ class TestCompressLogic:
         assert "x25" in compressed
 
 
+# 工厂测试确认 URL 配置优先级、固定工具集合及只压缩 alertmanager_list 的约束。
 class TestAlertmanagerFactory:
     def test_no_url_returns_unconfigured(self, monkeypatch):
         monkeypatch.delenv("ALERTMANAGER_URL", raising=False)

@@ -24,6 +24,7 @@ def get_builtin_toolsets(toolset_config: dict[str, Any]) -> list[Toolset]:
     from sre_agent.toolsets.tracing import create_tracing_toolset
     from sre_agent.utils.jinja import render_template
 
+    # 保持固定装载顺序，便于 CLI 展示、日志比较和测试断言稳定。
     toolsets: list[Toolset] = []
 
     yaml_toolsets = [
@@ -31,6 +32,7 @@ def get_builtin_toolsets(toolset_config: dict[str, Any]) -> list[Toolset]:
         Path(__file__).parent / "network.yaml",
     ]
     for yaml_path in yaml_toolsets:
+        # YAML 工具集与 Python 工具集走同一套 ToolsetManager 解析流程。
         if yaml_path.exists() and not _is_disabled(toolset_config, yaml_path.stem):
             mgr = ToolsetManager()
             mgr.load_yaml_toolsets([yaml_path])
@@ -40,6 +42,7 @@ def get_builtin_toolsets(toolset_config: dict[str, Any]) -> list[Toolset]:
                         tool._render = render_template
                 toolsets.append(ts)
 
+    # HTTP 工具集由工厂创建；工厂内部负责 URL、环境变量和后端能力配置。
     prom_config = _get_toolset_config(toolset_config, "prometheus")
     if not _is_disabled(toolset_config, "prometheus"):
         ts = create_prometheus_toolset(prom_config or {})
@@ -64,6 +67,7 @@ def get_builtin_toolsets(toolset_config: dict[str, Any]) -> list[Toolset]:
         if ts:
             toolsets.append(ts)
 
+    # Bash 放在末尾，避免其通用能力遮蔽更专用的观测工具描述。
     if not _is_disabled(toolset_config, "bash"):
         bash_config = _get_toolset_config(toolset_config, "bash")
         toolsets.append(create_bash_toolset(bash_config or {}))

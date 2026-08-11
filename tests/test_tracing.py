@@ -22,6 +22,7 @@ from sre_agent.toolsets.tracing import (
 from sre_agent.core.tool import ToolResultStatus
 
 
+# 测试统一通过该工厂构造内部 Span，默认值刻意保持最小，单个用例只覆盖关心的字段。
 def _make_span(span_id="s1", parent=None, service="svc", operation="op",
                duration_us=1000, status_code=0, attrs=None):
     return Span(
@@ -32,6 +33,7 @@ def _make_span(span_id="s1", parent=None, service="svc", operation="op",
     )
 
 
+# 属性过滤测试确保 SDK 噪声被移除，同时业务标签及“还有 N 项”的提示得到保留。
 class TestAttributeFiltering:
     def test_blacklist_prefixes_removed(self):
         attrs = {
@@ -69,6 +71,7 @@ class TestAttributeFiltering:
         assert _format_span_attrs(attrs) == ""
 
 
+# Span 树测试覆盖根/子层级、连接符，以及 ERROR/SLOW 两种诊断标记的阈值边界。
 class TestSpanTree:
     def test_simple_tree(self):
         spans = [
@@ -121,6 +124,7 @@ class TestSpanTree:
         assert len(lines[2]) - len(lines[2].lstrip()) > len(lines[1]) - len(lines[1].lstrip())
 
 
+# 搜索摘要使用固定列宽；断言关注可观察字段而不绑定无关的空白细节。
 class TestSearchResultsFormatting:
     def test_format_summaries(self):
         summaries = [
@@ -135,6 +139,7 @@ class TestSearchResultsFormatting:
     def test_empty_summaries(self):
         assert _format_search_results([]) == ""
 
+# OTLP 样例覆盖 resource/service、纳秒到微秒换算以及缺少父节点的根 span。
 class TestOTLPParsing:
     def test_parse_basic_otlp(self):
         data = {
@@ -178,6 +183,7 @@ class TestOTLPParsing:
         assert spans[0].parent_span_id is None
 
 
+# Jaeger 样例验证 processID 服务映射、错误标签兼容和 CHILD_OF 父子引用。
 class TestJaegerParsing:
     def test_parse_basic_jaeger(self):
         data = {
@@ -231,6 +237,7 @@ class TestJaegerParsing:
         assert spans[0].parent_span_id == "s1"
 
 
+# 后端参数测试通过 mock HTTP 边界检查 TraceQL 拼装及 Tempo/Jaeger 能力差异。
 class TestTempoParamsToTraceQL:
     def test_service_only(self):
         backend = TempoBackend("http://tempo:3200")
@@ -257,6 +264,7 @@ class TestTempoParamsToTraceQL:
         assert "service" in result.error
 
 
+# 压缩测试同时固定 60 行阈值、重要标记保留和非 trace_get 输出旁路行为。
 class TestCompressLogic:
     def test_small_trace_no_compress(self):
         toolset = create_tracing_toolset({"url": "http://tempo:3200"})
@@ -283,6 +291,7 @@ class TestCompressLogic:
         assert toolset.compress("trace_search", long_output) == long_output
 
 
+# 工厂测试隔离环境变量，验证未配置、自动识别和显式 provider 三条创建路径。
 class TestTracingToolsetFactory:
     def test_no_url_returns_unconfigured(self, monkeypatch):
         monkeypatch.delenv("TEMPO_URL", raising=False)

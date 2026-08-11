@@ -256,6 +256,8 @@ class YAMLTool(Tool):
     参数与 function schema。
     """
 
+    # validator 名称映射到预编译正则，YAML 只引用受控名称而不能注入任意表达式。
+    # hostname 同时允许域名、IPv4/IPv6 文本和端口所需的 ``.``、``-``、``:``。
     _PARAM_VALIDATOR_REGISTRY: dict[str, re.Pattern[str]] = {
         "hostname": re.compile(r"^[a-zA-Z0-9.\-:]+$"),
     }
@@ -299,10 +301,12 @@ class YAMLTool(Tool):
     def _validate_params(self, params: dict[str, Any]) -> str | None:
         """校验参数值是否符合声明的 validator。返回错误消息或 None。"""
 
+        # 只检查 YAML 显式声明的参数；未提供的可选参数由模板默认值处理。
         for param_name, validator_name in self._param_validators.items():
             value = params.get(param_name)
             if value is None:
                 continue
+            # 未注册的 validator 不在这里执行，防止把配置文本当作正则直接编译。
             pattern = self._PARAM_VALIDATOR_REGISTRY.get(validator_name)
             if pattern and not pattern.match(str(value)):
                 return (
@@ -314,6 +318,7 @@ class YAMLTool(Tool):
     def _invoke(self, params: dict[str, Any]) -> StructuredToolResult:
         """渲染命令模板并在受限超时时间内执行。"""
 
+        # 必须在 Jinja 渲染和 shell 执行之前校验，避免危险字符进入命令文本。
         validation_error = self._validate_params(params)
         if validation_error:
             return StructuredToolResult(

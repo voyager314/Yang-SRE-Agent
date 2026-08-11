@@ -20,6 +20,7 @@ from sre_agent.utils.time import parse_relative_time
 
 @dataclass
 class Span:
+    # Span 是两个后端的共同内部表示，避免上层工具感知 Tempo/Jaeger 的字段差异。
     trace_id: str
     span_id: str
     parent_span_id: str | None
@@ -34,6 +35,7 @@ class Span:
 
 @dataclass
 class TraceSummary:
+    # 搜索结果只保留列表展示所需的摘要字段，完整 span 树在 trace_get 时再获取。
     trace_id: str
     root_service: str
     root_operation: str
@@ -45,6 +47,7 @@ class TraceSummary:
 
 @runtime_checkable
 class TracingBackend(Protocol):
+    # 两个实现遵循同一协议，工具层即可通过 provider 切换而无需分支 HTTP 逻辑。
     def search_traces(self, params: dict[str, Any]) -> list[TraceSummary]: ...
     def get_trace(self, trace_id: str) -> list[Span]: ...
     def list_services(self) -> list[str]: ...
@@ -59,11 +62,13 @@ class TempoBackend:
         self.base_url = base_url.rstrip("/")
 
     def search_traces(self, params: dict[str, Any]) -> list[TraceSummary]:
+        # raw_query 允许高级用户直接传 TraceQL；没有它时由结构化参数拼出查询。
         raw_query = params.get("raw_query")
         if raw_query:
             api_params: dict[str, Any] = {"q": raw_query}
         else:
             parts: list[str] = []
+            # TraceQL 的过滤条件使用 && 连接，空条件用 {} 表示不过滤。
             if params.get("service"):
                 parts.append(f'resource.service.name="{params["service"]}"')
             if params.get("operation"):
@@ -79,6 +84,7 @@ class TempoBackend:
             api_params = {"q": q}
 
         if params.get("start"):
+            # Tempo 接口使用 Unix 秒；start/end 共享同一当前时刻以保持范围闭合。
             now = time.time()
             api_params["start"] = int(parse_relative_time(params["start"], now))
             api_params["end"] = int(now)
@@ -93,6 +99,7 @@ class TempoBackend:
         return [self._to_summary(t) for t in data.get("traces", [])]
 
     def _to_summary(self, t: dict[str, Any]) -> TraceSummary:
+        # Tempo 的 spanSets.matched 是部分版本的计数来源，旧版本则回退 spanCount。
         return TraceSummary(
             trace_id=t.get("traceID", ""),
             root_service=t.get("rootServiceName", ""),
@@ -105,6 +112,7 @@ class TempoBackend:
         )
 
     def get_trace(self, trace_id: str) -> list[Span]:
+        # Accept 头要求 Tempo 返回 OTLP JSON，随后统一转换为 Span 列表。
         resp = httpx.get(
             f"{self.base_url}/api/traces/{trace_id}", timeout=30.0,
             headers={"Accept": "application/json"},
@@ -114,6 +122,7 @@ class TempoBackend:
         return _parse_otlp_spans(data)
 
     def list_services(self) -> list[str]:
+        # tagValues 在不同 Tempo 版本中可能使用 id 或 value，兼容两种字段名。
         resp = httpx.get(
             f"{self.base_url}/api/v2/search/tag/service.name/values", timeout=15.0
         )
@@ -130,6 +139,7 @@ class JaegerBackend:
         self.base_url = base_url.rstrip("/")
 
     def search_traces(self, params: dict[str, Any]) -> list[TraceSummary]:
+        # Jaeger 查询必须带 service；这也是 TraceSearchTool 提前校验的原因。
         service = params.get("service")
         if not service:
             raise ValueError("service parameter is required for Jaeger backend")
@@ -141,9 +151,11 @@ class JaegerBackend:
         if params.get("max_duration"):
             api_params["maxDuration"] = params["max_duration"]
         if params.get("tags"):
+            # Jaeger 要求 tags 参数是 JSON 字符串，而不是嵌套 query 参数。
             import json
             api_params["tags"] = json.dumps(params["tags"])
         if params.get("start"):
+            # Jaeger 使用微秒时间戳，故先以秒解析再放大 1_000_000。
             now = time.time()
             start_ts = parse_relative_time(params["start"], now)
             api_params["start"] = int(start_ts * 1_000_000)
@@ -159,10 +171,12 @@ class JaegerBackend:
         return [self._to_summary(t) for t in data.get("data", [])]
 
     def _to_summary(self, t: dict[str, Any]) -> TraceSummary:
+        # Jaeger 的根 span 同时提供服务、操作和整条 trace 的持续时间。
         spans = t.get("spans", [])
         processes = t.get("processes", {})
         root = spans[0] if spans else {}
         root_proc = processes.get(root.get("processID", ""), {})
+        # 同时识别 Jaeger error 标签和 OpenTelemetry status_code，覆盖两种埋点习惯。
         error_count = sum(
             1 for s in spans
             if any(tag.get("key") == "error" and tag.get("value") for tag in s.get("tags", []))
@@ -202,6 +216,7 @@ class JaegerBackend:
 # ---------------------------------------------------------------------------
 
 def _parse_otlp_spans(data: dict[str, Any]) -> list[Span]:
+    # Tempo/OTLP 的 resource -> scope -> span 是多层嵌套，逐层展开后统一建模。
     spans: list[Span] = []
     for rs in data.get("batches", data.get("resourceSpans", [])):
         resource = rs.get("resource", {})
@@ -210,8 +225,10 @@ def _parse_otlp_spans(data: dict[str, Any]) -> list[Span]:
             if attr.get("key") == "service.name":
                 service_name = attr.get("value", {}).get("stringValue", "")
                 break
+        # instrumentationLibrarySpans 是旧 OTLP 字段名，作为 scopeSpans 的兼容回退。
         for ss in rs.get("scopeSpans", rs.get("instrumentationLibrarySpans", [])):
             for s in ss.get("spans", []):
+                # 属性值在 OTLP 中按 string/int/bool 分字段编码，取第一个存在的值。
                 attrs = {}
                 for a in s.get("attributes", []):
                     val = a.get("value", {})
@@ -232,6 +249,7 @@ def _parse_otlp_spans(data: dict[str, Any]) -> list[Span]:
     return spans
 
 def _parse_jaeger_spans(trace_data: dict[str, Any]) -> list[Span]:
+    # Jaeger 将进程元数据与 span 分离，先用 processID 找到 serviceName。
     spans: list[Span] = []
     processes = trace_data.get("processes", {})
     for s in trace_data.get("spans", []):
@@ -239,9 +257,11 @@ def _parse_jaeger_spans(trace_data: dict[str, Any]) -> list[Span]:
         attrs = {}
         for tag in s.get("tags", []):
             attrs[tag["key"]] = tag.get("value", "")
+        # 内部约定 2 表示错误，与 OTLP StatusCode.ERROR 保持一致。
         status_code = 0
         if attrs.get("otel.status_code") == "ERROR" or attrs.get("error") is True:
             status_code = 2
+        # CHILD_OF 引用描述父子关系；没有该引用的 span 会被视为根节点候选。
         refs = s.get("references", [])
         parent_id = None
         for ref in refs:
@@ -275,6 +295,7 @@ _ATTR_BLACKLIST_KEYS = frozenset({
 
 
 def _filter_attrs(attrs: dict[str, Any]) -> dict[str, Any]:
+    # 过滤 SDK 内部元数据，优先保留业务标签，减少无关上下文噪声。
     return {
         k: v for k, v in attrs.items()
         if k not in _ATTR_BLACKLIST_KEYS
@@ -283,6 +304,7 @@ def _filter_attrs(attrs: dict[str, Any]) -> dict[str, Any]:
 
 
 def _format_span_attrs(attrs: dict[str, Any], max_show: int = 4) -> str:
+    # 每个 span 只展示少量属性；额外数量通过 +N more 保留可见性。
     filtered = _filter_attrs(attrs)
     if not filtered:
         return ""
@@ -295,6 +317,7 @@ def _format_span_attrs(attrs: dict[str, Any], max_show: int = 4) -> str:
 
 
 def _build_span_tree(spans: list[Span]) -> dict[str | None, list[Span]]:
+    # 以 parent_span_id 建索引，并按开始时间排序，保证树输出稳定且符合时间顺序。
     children: dict[str | None, list[Span]] = {}
     for s in sorted(spans, key=lambda x: x.start_us):
         children.setdefault(s.parent_span_id, []).append(s)
@@ -306,6 +329,7 @@ def _render_span_tree(spans: list[Span]) -> str:
         return "(empty trace)"
     children = _build_span_tree(spans)
     span_map = {s.span_id: s for s in spans}
+    # 正常根节点 parent_span_id 为 None；部分采样结果缺根时再做容错推断。
     roots = children.get(None, [])
     if not roots:
         all_ids = {s.span_id for s in spans}
@@ -320,6 +344,7 @@ def _render_span_tree(spans: list[Span]) -> str:
 
     lines: list[str] = []
 
+    # 深度优先遍历同时生成树形连接符、耗时告警和筛选后的属性。
     def walk(span: Span, prefix: str, is_last: bool, parent_duration_us: int | None):
         connector = "└─ " if is_last else "├─ "
         dur_ms = span.duration_us / 1000.0
@@ -328,6 +353,7 @@ def _render_span_tree(spans: list[Span]) -> str:
         annotations: list[str] = []
         if span.status_code == 2:
             annotations.append("❌ ERROR")
+        # 子 span 占父 span 超过一半且超过 100ms 时标记为潜在慢点。
         if (parent_duration_us is not None
                 and span.duration_us > parent_duration_us * 0.5
                 and span.duration_us > 100_000):
@@ -351,6 +377,7 @@ def _render_span_tree(spans: list[Span]) -> str:
     return "\n".join(lines)
 
 def _format_search_results(summaries: list[TraceSummary]) -> str:
+    # 固定宽度表格让模型可以快速横向比较服务、耗时和错误数量。
     if not summaries:
         return ""
     header = f"{'TRACE ID':<34} {'SERVICE':<20} {'OPERATION':<25} {'DURATION':>10} {'SPANS':>6} {'ERRORS':>6}"
@@ -391,6 +418,7 @@ class TraceSearchTool(Tool):
         )
 
     def _invoke(self, params: dict[str, Any]) -> StructuredToolResult:
+        # raw_query 是 Tempo 专属能力；Jaeger 还要求 service 才能执行搜索。
         if params.get("raw_query") and self._provider == "jaeger":
             return StructuredToolResult(
                 status=ToolResultStatus.ERROR,
@@ -434,6 +462,7 @@ class TraceGetTool(Tool):
         )
 
     def _invoke(self, params: dict[str, Any]) -> StructuredToolResult:
+        # 先取得规范化 span 列表，再渲染为带错误/慢点标记的树形文本。
         trace_id = params["trace_id"]
         try:
             spans = self._backend.get_trace(trace_id)
@@ -480,6 +509,7 @@ class TraceServicesTool(Tool):
         )
 
     def _invoke(self, params: dict[str, Any]) -> StructuredToolResult:
+        # 排序后的服务名列表避免后端返回顺序变化导致提示词抖动。
         try:
             services = self._backend.list_services()
             if not services:
@@ -501,6 +531,7 @@ class TraceServicesTool(Tool):
 # ---------------------------------------------------------------------------
 
 def _detect_provider(url: str) -> str:
+    # 优先使用 URL 的明显特征；无法判断时发起一次轻量探测，最后安全回退 Jaeger。
     lower = url.lower()
     if "tempo" in lower:
         return "tempo"
@@ -518,6 +549,7 @@ def _detect_provider(url: str) -> str:
 def create_tracing_toolset(config: dict[str, Any]) -> Toolset | None:
     import os
 
+    # 支持显式 url，也支持按 Tempo -> Jaeger -> 通用 TRACING_URL 的环境变量回退。
     url = (
         config.get("url")
         or os.environ.get("TEMPO_URL")
@@ -532,6 +564,7 @@ def create_tracing_toolset(config: dict[str, Any]) -> Toolset | None:
             llm_instructions="Tracing is not configured.",
         )
 
+    # 显式 provider 可跳过探测；否则根据 URL/API 自动选择后端适配器。
     provider = config.get("provider") or _detect_provider(url)
     backend: TracingBackend
     if provider == "tempo":
@@ -541,11 +574,13 @@ def create_tracing_toolset(config: dict[str, Any]) -> Toolset | None:
 
     class TracingToolset(Toolset):
         def compress(self, tool_name: str, raw_output: str) -> str:
+            # trace_search/services 本身是摘要；只有完整树 trace_get 需要专门压缩。
             if tool_name != "trace_get":
                 return raw_output
             lines = raw_output.split("\n")
             if len(lines) <= 60:
                 return raw_output
+            # 保留总览、错误、慢点和第一个根分支，尽量在有限上下文中留下诊断线索。
             kept: list[str] = []
             for line in lines:
                 if ("❌" in line or "⚠️" in line
