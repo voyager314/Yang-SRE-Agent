@@ -17,23 +17,28 @@ def get_builtin_toolsets(toolset_config: dict[str, Any]) -> list[Toolset]:
 
     # 延迟导入避免包初始化期间形成 toolsets -> manager -> toolsets 循环。
     from sre_agent.core.toolset_manager import ToolsetManager
+    from sre_agent.toolsets.alertmanager import create_alertmanager_toolset
     from sre_agent.toolsets.bash import create_bash_toolset
     from sre_agent.toolsets.logs import create_logs_toolset
     from sre_agent.toolsets.prometheus import create_prometheus_toolset
+    from sre_agent.toolsets.tracing import create_tracing_toolset
     from sre_agent.utils.jinja import render_template
 
     toolsets: list[Toolset] = []
 
-    k8s_yaml = Path(__file__).parent / "kubernetes.yaml"
-    if k8s_yaml.exists():
-        mgr = ToolsetManager()
-        mgr.load_yaml_toolsets([k8s_yaml])
-        for ts in mgr.toolsets:
-            # 为自动解析的 YAMLTool 注入项目统一的 Jinja 渲染函数。
-            for tool in ts.tools:
-                if hasattr(tool, "_render") and tool._render is None:
-                    tool._render = render_template
-            toolsets.append(ts)
+    yaml_toolsets = [
+        Path(__file__).parent / "kubernetes.yaml",
+        Path(__file__).parent / "network.yaml",
+    ]
+    for yaml_path in yaml_toolsets:
+        if yaml_path.exists() and not _is_disabled(toolset_config, yaml_path.stem):
+            mgr = ToolsetManager()
+            mgr.load_yaml_toolsets([yaml_path])
+            for ts in mgr.toolsets:
+                for tool in ts.tools:
+                    if hasattr(tool, "_render") and tool._render is None:
+                        tool._render = render_template
+                toolsets.append(ts)
 
     prom_config = _get_toolset_config(toolset_config, "prometheus")
     if not _is_disabled(toolset_config, "prometheus"):
@@ -44,6 +49,18 @@ def get_builtin_toolsets(toolset_config: dict[str, Any]) -> list[Toolset]:
     logs_config = _get_toolset_config(toolset_config, "logs")
     if not _is_disabled(toolset_config, "logs"):
         ts = create_logs_toolset(logs_config or {})
+        if ts:
+            toolsets.append(ts)
+
+    tracing_config = _get_toolset_config(toolset_config, "tracing")
+    if not _is_disabled(toolset_config, "tracing"):
+        ts = create_tracing_toolset(tracing_config or {})
+        if ts:
+            toolsets.append(ts)
+
+    alertmanager_config = _get_toolset_config(toolset_config, "alertmanager")
+    if not _is_disabled(toolset_config, "alertmanager"):
+        ts = create_alertmanager_toolset(alertmanager_config or {})
         if ts:
             toolsets.append(ts)
 

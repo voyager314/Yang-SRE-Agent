@@ -29,12 +29,12 @@
 
 ## 4. Network Diagnostics Toolset
 
-- [ ] 4.1 Create `src/sre_agent/toolsets/network.yaml` with dns_lookup (dig), port_check (bash /dev/tcp or nc), http_check (curl -w), traceroute tools, each with `param_validators: {host: hostname}` or `{domain: hostname}`
-- [ ] 4.2 Add per-tool CommandPrerequisite checks (which dig, which curl, which traceroute, which nc) in the YAML prerequisites section
-- [ ] 4.3 Write integration test verifying param_validators reject shell metacharacters
+- [x] 4.1 Create `src/sre_agent/toolsets/network.yaml` with dns_lookup (dig), port_check (bash /dev/tcp or nc), http_check (curl -w), traceroute tools, each with `param_validators: {host: hostname}` or `{domain: hostname}`
+- [x] 4.2 Add per-tool CommandPrerequisite checks (which dig, which curl, which traceroute, which nc) in the YAML prerequisites section
+- [x] 4.3 Write integration test verifying param_validators reject shell metacharacters
 
 ## 5. Registration and Configuration
 
-- [ ] 5.1 Update `src/sre_agent/toolsets/__init__.py`: import and register tracing and alertmanager toolsets in `get_builtin_toolsets`, load network.yaml alongside kubernetes.yaml
-- [ ] 5.2 Update `src/sre_agent/config.py`: document new toolset config keys (tracing, alertmanager, network) — no schema change needed since ToolsetConfig already allows extra fields
-- [ ] 5.3 Verify end-to-end: toolset manager loads all new toolsets, prerequisite checks run, disabled toolsets don't register tools
+- [x] 5.1 Update `src/sre_agent/toolsets/__init__.py`: import and register tracing and alertmanager toolsets in `get_builtin_toolsets`, load network.yaml alongside kubernetes.yaml
+- [x] 5.2 Update `src/sre_agent/config.py`: document new toolset config keys (tracing, alertmanager, network) — no schema change needed since ToolsetConfig already allows extra fields
+- [x] 5.3 Verify end-to-end: toolset manager loads all new toolsets, prerequisite checks run, disabled toolsets don't register tools

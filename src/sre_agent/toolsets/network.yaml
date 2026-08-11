@@ -1,0 +1,42 @@
+name: network
+llm_instructions: |
+  You have access to network diagnostic tools.
+  Use these to troubleshoot DNS resolution, TCP connectivity, HTTP endpoint health, and routing.
+  All host/domain parameters are validated to prevent shell injection.
+
+tools:
+  - name: dns_lookup
+    description: "Resolve DNS records for a domain (A, AAAA, CNAME, MX, TXT, etc.)"
+    command: "dig +noall +answer {{ domain }} {{ type | default('A') }}"
+    timeout: 15
+    param_validators:
+      domain: hostname
+    prerequisites:
+      - command: "which dig"
+
+  - name: port_check
+    description: "Check TCP port connectivity to a host (returns success/failure with timing)"
+    command: "nc -z -w 5 {{ host }} {{ port }} 2>&1 && echo 'PORT_OPEN' || echo 'PORT_CLOSED'"
+    timeout: 10
+    param_validators:
+      host: hostname
+    prerequisites:
+      - command: "which nc"
+
+  - name: http_check
+    description: "Check HTTP endpoint health, returning status code, response time, and size"
+    command: "curl -s -o /dev/null -w 'status_code: %{http_code}\\ntime_total: %{time_total}s\\ntime_connect: %{time_connect}s\\ntime_dns: %{time_namelookup}s\\nsize: %{size_download} bytes' --max-time 10 '{{ url }}'"
+    timeout: 15
+    param_validators:
+      url: hostname
+    prerequisites:
+      - command: "which curl"
+
+  - name: traceroute
+    description: "Trace network route to a host, showing each hop with latency"
+    command: "traceroute -m 20 -w 3 {{ host }}"
+    timeout: 60
+    param_validators:
+      host: hostname
+    prerequisites:
+      - command: "which traceroute"
