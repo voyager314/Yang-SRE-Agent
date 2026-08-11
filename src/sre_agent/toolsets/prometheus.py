@@ -13,6 +13,7 @@ from sre_agent.core.tool import (
     ToolResultStatus,
     Toolset,
 )
+from sre_agent.utils.time import parse_relative_time
 
 
 class PrometheusQueryTool(Tool):
@@ -105,8 +106,8 @@ class PrometheusRangeQueryTool(Tool):
 
         # 起止时间共享同一个 now，避免解析期间的时间差造成边界漂移。
         now = time.time()
-        start_ts = _parse_relative_time(start, now)
-        end_ts = _parse_relative_time(end, now) if end != "now" else now
+        start_ts = parse_relative_time(start, now)
+        end_ts = parse_relative_time(end, now) if end != "now" else now
 
         try:
             resp = httpx.get(
@@ -134,24 +135,6 @@ class PrometheusRangeQueryTool(Tool):
             )
         except Exception as e:
             return StructuredToolResult(status=ToolResultStatus.ERROR, error=str(e))
-
-
-def _parse_relative_time(value: str, now: float) -> float:
-    """将 ``-15m`` 等相对时间或 Unix 时间字符串转换为时间戳。
-
-    无法识别的值回退到 ``now``，保证工具返回结构化查询结果或远端错误，
-    而不是在参数预处理阶段使整个调查中断。
-    """
-
-    if value.startswith("-"):
-        unit_map = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-        unit = value[-1]
-        num = int(value[1:-1])
-        return now - num * unit_map.get(unit, 1)
-    try:
-        return float(value)
-    except ValueError:
-        return now
 
 
 def _format_results(results: list[dict[str, Any]]) -> str:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import time
 from abc import ABC, abstractmethod
@@ -255,6 +256,10 @@ class YAMLTool(Tool):
     参数与 function schema。
     """
 
+    _PARAM_VALIDATOR_REGISTRY: dict[str, re.Pattern[str]] = {
+        "hostname": re.compile(r"^[a-zA-Z0-9.\-:]+$"),
+    }
+
     def __init__(
         self,
         name: str,
@@ -263,11 +268,13 @@ class YAMLTool(Tool):
         script: str | None = None,
         timeout: float = 30.0,
         render_func: Any = None,
+        param_validators: dict[str, str] | None = None,
     ):
         self.command_template = command or ""
         self.script_template = script or ""
         self.timeout = timeout
         self._render = render_func
+        self._param_validators = param_validators or {}
         parameters = self._infer_parameters()
         super().__init__(name=name, description=description, parameters=parameters)
 
@@ -289,8 +296,30 @@ class YAMLTool(Tool):
             schema["required"] = required
         return schema
 
+    def _validate_params(self, params: dict[str, Any]) -> str | None:
+        """校验参数值是否符合声明的 validator。返回错误消息或 None。"""
+
+        for param_name, validator_name in self._param_validators.items():
+            value = params.get(param_name)
+            if value is None:
+                continue
+            pattern = self._PARAM_VALIDATOR_REGISTRY.get(validator_name)
+            if pattern and not pattern.match(str(value)):
+                return (
+                    f"Parameter '{param_name}' contains invalid characters. "
+                    f"Expected format: {validator_name}"
+                )
+        return None
+
     def _invoke(self, params: dict[str, Any]) -> StructuredToolResult:
         """渲染命令模板并在受限超时时间内执行。"""
+
+        validation_error = self._validate_params(params)
+        if validation_error:
+            return StructuredToolResult(
+                status=ToolResultStatus.ERROR,
+                error=validation_error,
+            )
 
         template = self.command_template or self.script_template
         # 没有渲染函数时保留原模板，便于程序化构造无占位符的工具。

@@ -105,6 +105,7 @@ class ToolsetManager:
                 script=td.get("script"),
                 timeout=td.get("timeout", 30.0),
                 render_func=render_template,
+                param_validators=td.get("param_validators"),
             )
             tools.append(tool)
         return tools
