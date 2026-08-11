@@ -94,3 +94,10 @@ CLI 参数 SHALL 具有最高配置优先级，覆盖环境变量和配置文件
 #### Scenario: 环境变量覆盖
 - **WHEN** 环境变量 `SRE_AGENT_MEMORY_ENABLED=false` 存在
 - **THEN** 覆盖 config.yaml 中的 memory_enabled 设置
+
+### Requirement: Bundled default config templates
+配置系统 SHALL 在 `sre_agent.defaults` 包中携带 `config.example.yaml` 和 `models.example.yaml` 模板文件，作为首次运行初始化的数据来源。
+
+#### Scenario: 模板作为包数据可访问
+- **WHEN** 代码调用 `importlib.resources.files("sre_agent.defaults").joinpath("config.example.yaml")`
+- **THEN** 返回有效的可读资源，内容为完整的配置示例

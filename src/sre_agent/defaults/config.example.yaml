@@ -1,0 +1,46 @@
+# SRE Agent 配置
+# 路径: ~/.sre-agent/config.yaml
+
+# 默认模型 (对应 models.yaml 中的名称, 或 LiteLLM 模型标识)
+model: null
+
+# 引擎参数
+max_steps: 50
+max_tool_output_lines: 2000
+compress_threshold: 0.70
+converge_threshold: 0.90
+
+# 跨会话调查记忆
+memory_enabled: true
+embedding_model: Alibaba-NLP/gte-Qwen2-1.5B-instruct
+memory_top_k: 3
+memory_score_threshold: 0.6
+
+# 工具集
+toolsets:
+  prometheus:
+    enabled: true
+    config:
+      url: http://localhost:9090
+
+  alertmanager:
+    enabled: true
+    config:
+      url: http://localhost:9093
+
+  logs:
+    enabled: true
+    config:
+      provider: loki          # loki | elasticsearch
+      url: http://localhost:3100
+
+  tracing:
+    enabled: true
+    config:
+      provider: tempo          # tempo | jaeger
+      url: http://localhost:3200
+
+  bash:
+    enabled: true
+    config:
+      timeout: 60.0

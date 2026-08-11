@@ -11,6 +11,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
+from sre_agent import ensure_config
 from sre_agent.config import DEFAULT_CONFIG_FILE, Config
 from sre_agent.core.context_manager import ContextManager
 from sre_agent.core.engine import Engine
@@ -304,6 +305,8 @@ def main(
     ] = None,
 ) -> None:
     """AI-powered SRE agent for infrastructure diagnostics."""
+
+    ensure_config(console)
 
     config = Config(_config_file=str(config_file) if config_file else str(DEFAULT_CONFIG_FILE))  # type: ignore
     engine, system_prompt, mgr = _build_engine(config, model)

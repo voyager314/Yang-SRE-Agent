@@ -53,3 +53,10 @@ CLI 交互层，提供统一的 REPL 界面，默认进入交互模式，支持�
 #### Scenario: 最终结论渲染
 - **WHEN** 引擎返回最终回答
 - **THEN** 终端以 Markdown 格式渲染诊断结论
+
+### Requirement: First-run init call at entry point
+CLI 入口 SHALL 在构建 Config 之前调用 `ensure_config()`，确保配置目录和文件在配置加载前就位。
+
+#### Scenario: 首次启动自动初始化
+- **WHEN** 用户首次执行 `sre-agent`（`~/.sre-agent/` 不存在）
+- **THEN** 系统先完成配置初始化，再进入正常的配置加载和 REPL 启动流程
