@@ -7,16 +7,16 @@
 
 ## 2. Tracing Toolset
 
-- [ ] 2.1 Create `src/sre_agent/toolsets/tracing.py` with data classes: `Span` (trace_id, span_id, parent_span_id, service, operation, start_us, duration_us, status_code, attributes, events) and `TraceSummary` (trace_id, root_service, root_operation, duration_ms, span_count, error_count, start_time)
-- [ ] 2.2 Implement `TracingBackend` Protocol with `search_traces`, `get_trace`, `list_services` method signatures
-- [ ] 2.3 Implement `TempoBackend`: search_traces (params→TraceQL translation + raw_query passthrough), get_trace (OTLP JSON→Span list), list_services (/api/v2/search/tag/service.name/values)
-- [ ] 2.4 Implement `JaegerBackend`: search_traces (direct param mapping to /api/traces), get_trace (Jaeger format→Span list), list_services (/api/services)
-- [ ] 2.5 Implement shared formatting: `_ATTR_BLACKLIST_PREFIXES`, `_ATTR_BLACKLIST_KEYS`, `_filter_attrs`, `_format_span_attrs` (max 4 shown + folding)
-- [ ] 2.6 Implement `_build_span_tree` (parent_span_id→children map, DFS) and `_render_span_tree` (├─/└─ indentation, ⚠️ SLOW / ❌ ERROR annotation)
-- [ ] 2.7 Implement `_format_search_results` (table format with trace_id, service, operation, duration, spans, errors)
-- [ ] 2.8 Implement `TraceSearchTool`, `TraceGetTool`, `TraceServicesTool` tool classes
-- [ ] 2.9 Implement `create_tracing_toolset` factory: provider detection (_detect_provider), URL resolution (TEMPO_URL→JAEGER_URL→TRACING_URL), TracingToolset with compress() hook
-- [ ] 2.10 Write unit tests for: params→TraceQL translation, OTLP JSON parsing, Jaeger format parsing, span tree building, attribute blacklist filtering, compress logic
+- [x] 2.1 Create `src/sre_agent/toolsets/tracing.py` with data classes: `Span` (trace_id, span_id, parent_span_id, service, operation, start_us, duration_us, status_code, attributes, events) and `TraceSummary` (trace_id, root_service, root_operation, duration_ms, span_count, error_count, start_time)
+- [x] 2.2 Implement `TracingBackend` Protocol with `search_traces`, `get_trace`, `list_services` method signatures
+- [x] 2.3 Implement `TempoBackend`: search_traces (params→TraceQL translation + raw_query passthrough), get_trace (OTLP JSON→Span list), list_services (/api/v2/search/tag/service.name/values)
+- [x] 2.4 Implement `JaegerBackend`: search_traces (direct param mapping to /api/traces), get_trace (Jaeger format→Span list), list_services (/api/services)
+- [x] 2.5 Implement shared formatting: `_ATTR_BLACKLIST_PREFIXES`, `_ATTR_BLACKLIST_KEYS`, `_filter_attrs`, `_format_span_attrs` (max 4 shown + folding)
+- [x] 2.6 Implement `_build_span_tree` (parent_span_id→children map, DFS) and `_render_span_tree` (├─/└─ indentation, ⚠️ SLOW / ❌ ERROR annotation)
+- [x] 2.7 Implement `_format_search_results` (table format with trace_id, service, operation, duration, spans, errors)
+- [x] 2.8 Implement `TraceSearchTool`, `TraceGetTool`, `TraceServicesTool` tool classes
+- [x] 2.9 Implement `create_tracing_toolset` factory: provider detection (_detect_provider), URL resolution (TEMPO_URL→JAEGER_URL→TRACING_URL), TracingToolset with compress() hook
+- [x] 2.10 Write unit tests for: params→TraceQL translation, OTLP JSON parsing, Jaeger format parsing, span tree building, attribute blacklist filtering, compress logic
 
 ## 3. Alertmanager Toolset
 
