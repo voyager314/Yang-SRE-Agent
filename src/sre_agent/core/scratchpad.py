@@ -37,6 +37,14 @@ class Scratchpad:
         if next_steps is not None:
             self.next_steps = next_steps
 
+    def clear(self) -> None:
+        """重置所有字段为空列表。"""
+
+        self.findings = []
+        self.hypotheses = []
+        self.ruled_out = []
+        self.next_steps = []
+
     def is_empty(self) -> bool:
         """所有字段均为空列表时返回 True。"""
 

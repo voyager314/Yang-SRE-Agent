@@ -23,6 +23,14 @@ class EvidenceStore:
         path.write_text(content, encoding="utf-8")
         return path
 
+    def clear(self) -> None:
+        """删除所有已存储的证据文件。"""
+
+        if self._base_dir.exists():
+            for f in self._base_dir.iterdir():
+                if f.is_file():
+                    f.unlink()
+
     def load(self, call_id: str) -> str | None:
         """读取指定 call_id 的完整输出；文件不存在时返回 None。"""
 
