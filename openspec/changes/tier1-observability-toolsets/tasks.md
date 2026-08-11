@@ -20,12 +20,12 @@
 
 ## 3. Alertmanager Toolset
 
-- [ ] 3.1 Create `src/sre_agent/toolsets/alertmanager.py` with `AlertmanagerListTool` (params: filter, silenced, inhibited) calling GET /api/v2/alerts
-- [ ] 3.2 Implement `AlertmanagerSilencesTool` calling GET /api/v2/silences, filtering active silences
-- [ ] 3.3 Implement alert formatting: group by severity (critical→warning→info), show alertname/namespace/pod/message core labels
-- [ ] 3.4 Implement silence formatting: show matchers, createdBy, endsAt, comment
-- [ ] 3.5 Implement `create_alertmanager_toolset` factory: URL resolution (config→ALERTMANAGER_URL env), AlertmanagerToolset with compress() (alertname dedup + count)
-- [ ] 3.6 Write unit tests for: alert grouping/formatting, silence formatting, compress logic
+- [x] 3.1 Create `src/sre_agent/toolsets/alertmanager.py` with `AlertmanagerListTool` (params: filter, silenced, inhibited) calling GET /api/v2/alerts
+- [x] 3.2 Implement `AlertmanagerSilencesTool` calling GET /api/v2/silences, filtering active silences
+- [x] 3.3 Implement alert formatting: group by severity (critical→warning→info), show alertname/namespace/pod/message core labels
+- [x] 3.4 Implement silence formatting: show matchers, createdBy, endsAt, comment
+- [x] 3.5 Implement `create_alertmanager_toolset` factory: URL resolution (config→ALERTMANAGER_URL env), AlertmanagerToolset with compress() (alertname dedup + count)
+- [x] 3.6 Write unit tests for: alert grouping/formatting, silence formatting, compress logic
 
 ## 4. Network Diagnostics Toolset
 
