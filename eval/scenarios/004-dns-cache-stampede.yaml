@@ -1,0 +1,344 @@
+id: "dns-cache-stampede"
+description: "DNS 解析间歇性失败导致缓存穿透，继而引发数据库过载，三层连锁反应"
+category: "cascading-failure"
+difficulty: "hard"
+
+question: |
+  多个服务同时出现间歇性错误，包括 product-service 的 500 错误、
+  cache-service 的超时告警以及数据库 CPU 飙升。没有近期部署。请诊断根因。
+
+tool_responses:
+
+  alertmanager_list:
+    - match: {}
+      result:
+        status: "success"
+        data: |
+          [CRITICAL] (2 alerts)
+          ----------------------------------------
+            HighErrorRate | ns=production | service=product-service
+              Error rate above 15% for product-service
+            PostgresHighCPU | ns=production | instance=postgres-primary
+              PostgreSQL CPU usage above 90%
+
+          [WARNING] (4 alerts)
+          ----------------------------------------
+            HighLatencyP99 | ns=production | service=product-service
+              P99 latency above 5s for product-service
+            CacheMissRateHigh | ns=production | service=cache-service
+              Cache miss rate above 80% (normal: 5-10%)
+            DNSResolutionFailures | ns=production
+              DNS resolution failure rate above 2%
+            HighLatencyP99 | ns=production | service=order-service
+              P99 latency above 3s for order-service
+
+  prometheus_query:
+    - match:
+        query_contains: "error"
+      result:
+        status: "success"
+        data: |
+          {service="product-service", code="500"} => 52.3
+          {service="product-service", code="200"} => 295.1
+          {service="order-service", code="504"} => 8.7
+          {service="cache-service", code="500"} => 28.4
+
+    - match:
+        query_contains: "cache_hit"
+      result:
+        status: "success"
+        data: |
+          {service="cache-service", result="hit"} => 68.2
+          {service="cache-service", result="miss"} => 312.5
+
+    - match:
+        query_contains: "cache_miss"
+      result:
+        status: "success"
+        data: |
+          {service="cache-service"} => 0.82
+
+    - match:
+        query_contains: "dns"
+      result:
+        status: "success"
+        data: |
+          {instance="coredns-1", type="failure"} => 45.2
+          {instance="coredns-1", type="success"} => 2100
+          {instance="coredns-2", type="failure"} => 0.3
+          {instance="coredns-2", type="success"} => 2050
+
+    - match:
+        query_contains: "cpu"
+      result:
+        status: "success"
+        data: |
+          {container="postgres-primary"} => 0.93
+          {container="product-service"} => 0.45
+          {container="cache-service"} => 0.38
+          {container="coredns-1"} => 0.15
+          {container="coredns-2"} => 0.12
+
+    - match:
+        query_contains: "memory"
+      result:
+        status: "success"
+        data: |
+          {container="postgres-primary"} => 3800000000
+          {container="product-service"} => 520000000
+          {container="cache-service"} => 1200000000
+
+    - match:
+        query_contains: "duration"
+      result:
+        status: "success"
+        data: |
+          {service="product-service", quantile="0.99"} => 6.8
+          {service="cache-service", quantile="0.99"} => 2.1
+          {service="order-service", quantile="0.99"} => 3.5
+
+    - match:
+        query_contains: "postgres"
+      result:
+        status: "success"
+        data: |
+          {datname="productdb", state="active"} => 95
+          {datname="productdb", state="idle"} => 5
+          {datname="productdb", state="max"} => 100
+          {datname="productdb", waiting="true"} => 38
+
+    - match:
+        query_contains: "request"
+      result:
+        status: "success"
+        data: |
+          {service="product-service"} => 347.4
+          {service="cache-service"} => 380.7
+          {service="order-service"} => 156.2
+
+    - match:
+        query_contains: "up"
+      result:
+        status: "success"
+        data: |
+          {job="product-service"} => 1
+          {job="cache-service"} => 1
+          {job="order-service"} => 1
+          {job="postgres-primary"} => 1
+          {job="coredns"} => 1
+
+  prometheus_query_range:
+    - match:
+        query_contains: "dns"
+      result:
+        status: "success"
+        data: |
+          {instance="coredns-1", type="failure"}:
+            [1723452000] 0
+            [1723453200] 0.5
+            [1723454400] 8.3
+            [1723455600] 25.1
+            [1723456800] 45.2
+          {instance="coredns-2", type="failure"}:
+            [1723452000] 0
+            [1723453200] 0
+            [1723454400] 0.1
+            [1723455600] 0.2
+            [1723456800] 0.3
+
+    - match:
+        query_contains: "cache"
+      result:
+        status: "success"
+        data: |
+          {service="cache-service", result="miss"}:
+            [1723452000] 18.5
+            [1723453200] 35.2
+            [1723454400] 120.8
+            [1723455600] 245.3
+            [1723456800] 312.5
+
+    - match:
+        query_contains: "cpu"
+      result:
+        status: "success"
+        data: |
+          {container="postgres-primary"}:
+            [1723452000] 0.25
+            [1723453200] 0.38
+            [1723454400] 0.62
+            [1723455600] 0.81
+            [1723456800] 0.93
+
+    - match:
+        query_contains: "error"
+      result:
+        status: "success"
+        data: |
+          {service="product-service", code="500"}:
+            [1723452000] 0.5
+            [1723453200] 3.2
+            [1723454400] 18.7
+            [1723455600] 38.2
+            [1723456800] 52.3
+          {service="cache-service", code="500"}:
+            [1723452000] 0
+            [1723453200] 1.5
+            [1723454400] 8.2
+            [1723455600] 18.9
+            [1723456800] 28.4
+
+  loki_query:
+    - match:
+        query_contains: "dns"
+      result:
+        status: "success"
+        data: |
+          [app="coredns"] 2024-08-12T10:30:01Z ERROR - SERVFAIL for cache-service.production.svc.cluster.local: upstream 10.0.0.10:53 timed out
+          [app="coredns"] 2024-08-12T10:30:05Z ERROR - SERVFAIL for cache-service.production.svc.cluster.local: upstream timeout
+          [app="coredns"] 2024-08-12T10:28:00Z WARN - upstream DNS server 10.0.0.10 latency spike: 2800ms (threshold: 500ms)
+          [app="coredns"] 2024-08-12T10:25:12Z INFO - cache entry expired for cache-service.production.svc.cluster.local, refreshing
+          [app="coredns"] 2024-08-12T10:25:13Z ERROR - SERVFAIL for cache-service.production.svc.cluster.local: upstream 10.0.0.10:53 timed out
+
+    - match:
+        query_contains: "product"
+      result:
+        status: "success"
+        data: |
+          [app="product-service"] 2024-08-12T10:30:02Z ERROR - cache lookup failed: dial tcp: lookup cache-service.production.svc.cluster.local: no such host
+          [app="product-service"] 2024-08-12T10:30:02Z WARN - cache miss, falling back to database for product catalog query
+          [app="product-service"] 2024-08-12T10:30:03Z ERROR - database query timeout: active connections 95/100
+          [app="product-service"] 2024-08-12T10:29:55Z ERROR - cache lookup failed: dial tcp: lookup cache-service.production.svc.cluster.local: i/o timeout
+          [app="product-service"] 2024-08-12T10:29:55Z WARN - cache miss, falling back to database for product catalog query
+          [app="product-service"] 2024-08-12T10:29:40Z INFO - healthy cache response in 2ms
+          [app="product-service"] 2024-08-12T10:29:42Z ERROR - cache lookup failed: connection refused (DNS resolved but service unavailable)
+
+    - match:
+        query_contains: "cache"
+      result:
+        status: "success"
+        data: |
+          [app="cache-service"] 2024-08-12T10:30:00Z WARN - incoming request surge: 380 req/s (normal: 200 req/s)
+          [app="cache-service"] 2024-08-12T10:29:50Z INFO - healthy, serving from memory cache
+          [app="cache-service"] 2024-08-12T10:29:55Z ERROR - eviction pressure: cache at 95% capacity, evicting LRU entries
+          [app="cache-service"] 2024-08-12T10:30:01Z WARN - client connections dropped: 45 connections reset in last 60s
+
+    - match:
+        query_contains: "postgres"
+      result:
+        status: "success"
+        data: |
+          [app="postgres"] 2024-08-12T10:30:05Z WARNING - 38 queries currently waiting for connections
+          [app="postgres"] 2024-08-12T10:30:03Z LOG - connection limit reached: 95/100 active connections
+          [app="postgres"] 2024-08-12T10:29:58Z LOG - duration: 4521.234 ms  statement: SELECT p.*, c.name as category FROM products p JOIN categories c ON p.category_id = c.id WHERE p.status = 'active'
+          [app="postgres"] 2024-08-12T10:28:30Z LOG - duration: 1823.456 ms  statement: SELECT p.*, c.name as category FROM products p JOIN categories c ON p.category_id = c.id WHERE p.status = 'active'
+
+    - match:
+        query_contains: "error"
+      result:
+        status: "success"
+        data: |
+          [app="coredns"] 2024-08-12T10:30:01Z ERROR - SERVFAIL for cache-service.production.svc.cluster.local
+          [app="product-service"] 2024-08-12T10:30:02Z ERROR - cache lookup failed: no such host
+          [app="product-service"] 2024-08-12T10:30:03Z ERROR - database query timeout
+          [app="cache-service"] 2024-08-12T10:29:55Z ERROR - eviction pressure: cache at 95%
+
+  trace_search:
+    - match:
+        service: "product-service"
+      result:
+        status: "success"
+        data: |
+          TRACE ID                           SERVICE              OPERATION                 DURATION  SPANS ERRORS
+          ---------------------------------- -------------------- ------------------------- ---------- ------ ------
+          trace_cascade_001                  product-service      GET /api/products            6800ms      8      2
+          trace_cascade_002                  product-service      GET /api/products/123        4200ms      6      1
+          trace_cascade_ok                   product-service      GET /api/products             180ms      5      0
+
+    - match: {}
+      result:
+        status: "success"
+        data: |
+          TRACE ID                           SERVICE              OPERATION                 DURATION  SPANS ERRORS
+          ---------------------------------- -------------------- ------------------------- ---------- ------ ------
+          trace_cascade_001                  product-service      GET /api/products            6800ms      8      2
+
+  trace_get:
+    - match:
+        trace_id: "trace_cascade_001"
+      result:
+        status: "success"
+        data: |
+          Trace: trace_cascade_001
+          Spans: 8 | Errors: 2
+
+          └─ product-service::GET /api/products (6800.0ms) ❌ ERROR ⚠️ SLOW
+             ├─ product-service::cacheGet (5000.0ms) ❌ ERROR ⚠️ SLOW [error="dns resolution failed: no such host"]
+             ├─ product-service::dbFallback (1750.0ms) ⚠️ SLOW
+             │  ├─ product-service::acquireConnection (800.0ms)
+             │  └─ postgres::SELECT products JOIN categories (920.0ms) ❌ ERROR [error="query timeout"]
+             └─ product-service::formatResponse (15.0ms)
+
+    - match:
+        trace_id: "trace_cascade_002"
+      result:
+        status: "success"
+        data: |
+          Trace: trace_cascade_002
+          Spans: 6 | Errors: 1
+
+          └─ product-service::GET /api/products/123 (4200.0ms) ⚠️ SLOW
+             ├─ product-service::cacheGet (3500.0ms) ❌ ERROR ⚠️ SLOW [error="connection timeout to cache-service"]
+             ├─ product-service::dbFallback (650.0ms)
+             │  ├─ product-service::acquireConnection (120.0ms)
+             │  └─ postgres::SELECT products WHERE id=123 (510.0ms)
+             └─ product-service::formatResponse (12.0ms)
+
+    - match:
+        trace_id: "trace_cascade_ok"
+      result:
+        status: "success"
+        data: |
+          Trace: trace_cascade_ok
+          Spans: 5 | Errors: 0
+
+          └─ product-service::GET /api/products (180.0ms)
+             ├─ product-service::cacheGet (2.0ms)
+             │  └─ cache-service::GET /cache/products (1.5ms)
+             └─ product-service::formatResponse (8.0ms)
+
+  trace_services:
+    - match: {}
+      result:
+        status: "success"
+        data: |
+          cache-service
+          coredns
+          order-service
+          postgres
+          product-service
+
+ground_truth:
+  root_cause_service: "coredns"
+  root_cause_type: "dns-failure"
+
+  key_signals:
+    - signal: "DNS SERVFAIL / dns resolution failed / no such host"
+      required: true
+    - signal: "coredns-1 失败率远高于 coredns-2 / upstream timeout"
+      required: true
+    - signal: "DNS 失败 -> 缓存不可达 -> 数据库回退 -> DB 过载（因果链）"
+      required: true
+    - signal: "cache miss rate 从正常 5-10% 飙升到 82%"
+      required: false
+    - signal: "postgres CPU 93% / 连接池 95/100"
+      required: false
+    - signal: "上游 DNS 服务器 10.0.0.10 延迟飙升"
+      required: false
+
+  wrong_conclusions:
+    - "product-service 代码问题"
+    - "cache-service 自身故障"
+    - "数据库性能问题是根因"
+    - "cache-service 容量不足"
+    - "网络分区"

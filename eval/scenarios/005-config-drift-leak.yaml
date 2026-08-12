@@ -1,0 +1,345 @@
+id: "config-drift-memory-leak"
+description: "配置变更引入的慢性内存泄漏，初期无告警，积累数小时后触发连锁故障，需要关联时间线"
+category: "slow-degradation"
+difficulty: "hard"
+
+question: |
+  search-service 从今天凌晨 2 点开始逐渐变慢，到上午 10 点开始出现 OOM 重启。
+  昨晚有一次配置变更但值班人员说"只改了日志级别"。请深入诊断。
+
+tool_responses:
+
+  alertmanager_list:
+    - match: {}
+      result:
+        status: "success"
+        data: |
+          [CRITICAL] (1 alert)
+          ----------------------------------------
+            KubePodCrashLooping | ns=production | pod=search-service-5f8a2-xk7j9
+              Pod is crash looping (restart count: 3)
+
+          [WARNING] (2 alerts)
+          ----------------------------------------
+            HighLatencyP99 | ns=production | service=search-service
+              P99 latency above 4s for search-service
+            HighMemoryUsage | ns=production | pod=search-service-5f8a2-xk7j9
+              Memory usage above 85% of limit
+
+  prometheus_query:
+    - match:
+        query_contains: "memory"
+      result:
+        status: "success"
+        data: |
+          {container="search-service", namespace="production"} => 1820000000
+          {container="search-service", resource="limits", unit="memory"} => 2147483648
+
+    - match:
+        query_contains: "restart"
+      result:
+        status: "success"
+        data: |
+          {container="search-service", namespace="production", pod="search-service-5f8a2-xk7j9"} => 3
+
+    - match:
+        query_contains: "error"
+      result:
+        status: "success"
+        data: |
+          {service="search-service", code="500"} => 15.8
+          {service="search-service", code="200"} => 128.3
+          {service="search-service", code="504"} => 4.2
+
+    - match:
+        query_contains: "cpu"
+      result:
+        status: "success"
+        data: |
+          {container="search-service"} => 0.55
+
+    - match:
+        query_contains: "duration"
+      result:
+        status: "success"
+        data: |
+          {service="search-service", quantile="0.99"} => 5.8
+          {service="search-service", quantile="0.50"} => 1.2
+
+    - match:
+        query_contains: "gc"
+      result:
+        status: "success"
+        data: |
+          {service="search-service", gc_type="full"} => 45
+          {service="search-service", gc_type="young"} => 2800
+          {service="search-service", gc_pause_seconds="sum"} => 128.5
+
+    - match:
+        query_contains: "heap"
+      result:
+        status: "success"
+        data: |
+          {service="search-service", area="heap", type="used"} => 1750000000
+          {service="search-service", area="heap", type="max"} => 1800000000
+          {service="search-service", area="nonheap", type="used"} => 185000000
+
+    - match:
+        query_contains: "request"
+      result:
+        status: "success"
+        data: |
+          {service="search-service"} => 148.3
+
+    - match:
+        query_contains: "up"
+      result:
+        status: "success"
+        data: |
+          {job="search-service"} => 1
+
+    - match:
+        query_contains: "thread"
+      result:
+        status: "success"
+        data: |
+          {service="search-service", state="runnable"} => 45
+          {service="search-service", state="waiting"} => 380
+          {service="search-service", state="blocked"} => 12
+
+  prometheus_query_range:
+    - match:
+        query_contains: "memory"
+      result:
+        status: "success"
+        data: |
+          {container="search-service", namespace="production"}:
+            [1723424400] 650000000
+            [1723428000] 780000000
+            [1723431600] 920000000
+            [1723435200] 1100000000
+            [1723438800] 1350000000
+            [1723442400] 1580000000
+            [1723446000] 1750000000
+            [1723449600] 1820000000
+          ... (showing monotonic increase from 02:00 to 10:00)
+
+    - match:
+        query_contains: "gc"
+      result:
+        status: "success"
+        data: |
+          {service="search-service", gc_type="full"}:
+            [1723424400] 0
+            [1723428000] 1
+            [1723431600] 3
+            [1723435200] 8
+            [1723438800] 15
+            [1723442400] 28
+            [1723446000] 38
+            [1723449600] 45
+
+    - match:
+        query_contains: "duration"
+      result:
+        status: "success"
+        data: |
+          {service="search-service", quantile="0.99"}:
+            [1723424400] 0.15
+            [1723428000] 0.35
+            [1723431600] 0.8
+            [1723435200] 1.5
+            [1723438800] 2.8
+            [1723442400] 4.2
+            [1723446000] 5.1
+            [1723449600] 5.8
+
+    - match:
+        query_contains: "thread"
+      result:
+        status: "success"
+        data: |
+          {service="search-service", state="waiting"}:
+            [1723424400] 50
+            [1723428000] 85
+            [1723431600] 130
+            [1723435200] 180
+            [1723438800] 245
+            [1723442400] 310
+            [1723446000] 355
+            [1723449600] 380
+
+    - match:
+        query_contains: "request"
+      result:
+        status: "success"
+        data: |
+          {service="search-service"}:
+            [1723424400] 45.2
+            [1723428000] 48.1
+            [1723431600] 52.3
+            [1723435200] 85.6
+            [1723438800] 142.5
+            [1723442400] 155.8
+            [1723446000] 150.2
+            [1723449600] 148.3
+
+  loki_query:
+    - match:
+        query_contains: "search-service"
+      result:
+        status: "success"
+        data: |
+          [app="search-service"] 2024-08-12T10:00:15Z ERROR - java.lang.OutOfMemoryError: GC overhead limit exceeded
+          [app="search-service"] 2024-08-12T10:00:15Z ERROR - Pod restarting (attempt 3)
+          [app="search-service"] 2024-08-12T09:55:02Z WARN - Full GC pause: 8.2s (heap: 1.75GB/1.8GB)
+          [app="search-service"] 2024-08-12T09:50:10Z WARN - Full GC pause: 5.1s (heap: 1.72GB/1.8GB)
+          [app="search-service"] 2024-08-12T09:30:00Z WARN - Full GC pause: 3.8s (heap: 1.68GB/1.8GB)
+          [app="search-service"] 2024-08-12T08:00:05Z DEBUG - query result cache entry created: key=search:category:electronics, size=2.4MB, ttl=INFINITE
+          [app="search-service"] 2024-08-12T07:30:12Z DEBUG - query result cache entry created: key=search:category:books, size=1.8MB, ttl=INFINITE
+          [app="search-service"] 2024-08-12T06:15:00Z DEBUG - query result cache entry created: key=search:brand:apple, size=3.1MB, ttl=INFINITE
+          [app="search-service"] 2024-08-12T04:00:08Z DEBUG - query result cache entry created: key=search:popular:trending, size=5.2MB, ttl=INFINITE
+          [app="search-service"] 2024-08-12T02:05:00Z INFO - configuration reloaded: search.cache.ttl changed from 3600 to -1 (infinite)
+          [app="search-service"] 2024-08-12T02:05:00Z INFO - configuration reloaded: log.level changed from INFO to DEBUG
+          [app="search-service"] 2024-08-12T02:04:58Z INFO - received ConfigMap update event, applying changes
+
+    - match:
+        query_contains: "config"
+      result:
+        status: "success"
+        data: |
+          [app="search-service"] 2024-08-12T02:05:00Z INFO - configuration reloaded: search.cache.ttl changed from 3600 to -1 (infinite)
+          [app="search-service"] 2024-08-12T02:05:00Z INFO - configuration reloaded: log.level changed from INFO to DEBUG
+          [app="search-service"] 2024-08-12T02:04:58Z INFO - received ConfigMap update event, applying changes
+
+    - match:
+        query_contains: "error"
+      result:
+        status: "success"
+        data: |
+          [app="search-service"] 2024-08-12T10:00:15Z ERROR - java.lang.OutOfMemoryError: GC overhead limit exceeded
+          [app="search-service"] 2024-08-12T10:00:15Z ERROR - Pod restarting (attempt 3)
+          [app="search-service"] 2024-08-12T09:58:30Z ERROR - request timeout: GET /api/search?q=laptop (client disconnected after 10s)
+          [app="search-service"] 2024-08-12T09:55:22Z ERROR - request timeout: GET /api/search?q=phone
+
+    - match:
+        query_contains: "gc"
+      result:
+        status: "success"
+        data: |
+          [app="search-service"] 2024-08-12T10:00:10Z WARN - Full GC pause: 12.5s (heap: 1.79GB/1.8GB) - GC overhead limit will be exceeded
+          [app="search-service"] 2024-08-12T09:55:02Z WARN - Full GC pause: 8.2s (heap: 1.75GB/1.8GB)
+          [app="search-service"] 2024-08-12T09:50:10Z WARN - Full GC pause: 5.1s (heap: 1.72GB/1.8GB)
+          [app="search-service"] 2024-08-12T09:30:00Z WARN - Full GC pause: 3.8s (heap: 1.68GB/1.8GB)
+          [app="search-service"] 2024-08-12T08:30:00Z WARN - Full GC pause: 1.2s (heap: 1.35GB/1.8GB)
+          [app="search-service"] 2024-08-12T06:00:00Z INFO - GC pause: 0.3s (heap: 0.9GB/1.8GB)
+
+    - match:
+        query_contains: "cache"
+      result:
+        status: "success"
+        data: |
+          [app="search-service"] 2024-08-12T10:00:00Z WARN - in-memory cache size: 4523 entries, estimated 1.2GB
+          [app="search-service"] 2024-08-12T08:00:05Z DEBUG - query result cache entry created: key=search:category:electronics, size=2.4MB, ttl=INFINITE
+          [app="search-service"] 2024-08-12T06:15:00Z DEBUG - query result cache entry created: key=search:brand:apple, size=3.1MB, ttl=INFINITE
+          [app="search-service"] 2024-08-12T04:00:08Z DEBUG - query result cache entry created: key=search:popular:trending, size=5.2MB, ttl=INFINITE
+          [app="search-service"] 2024-08-12T02:05:00Z INFO - configuration reloaded: search.cache.ttl changed from 3600 to -1 (infinite)
+
+    - match:
+        query_contains: "deploy"
+      result:
+        status: "no_data"
+
+    - match:
+        query_contains: "thread"
+      result:
+        status: "success"
+        data: |
+          [app="search-service"] 2024-08-12T09:55:00Z WARN - thread pool exhaustion approaching: 380 waiting threads (limit: 400)
+          [app="search-service"] 2024-08-12T09:50:00Z DEBUG - DEBUG log handler thread created (1 per request in DEBUG mode)
+          [app="search-service"] 2024-08-12T09:49:58Z DEBUG - DEBUG log handler thread created (1 per request in DEBUG mode)
+
+  trace_search:
+    - match:
+        service: "search-service"
+      result:
+        status: "success"
+        data: |
+          TRACE ID                           SERVICE              OPERATION                 DURATION  SPANS ERRORS
+          ---------------------------------- -------------------- ------------------------- ---------- ------ ------
+          trace_search_slow_1                search-service       GET /api/search              5800ms      5      1
+          trace_search_slow_2                search-service       GET /api/search              4200ms      4      0
+          trace_search_ok                    search-service       GET /api/search               120ms      4      0
+
+    - match: {}
+      result:
+        status: "success"
+        data: |
+          TRACE ID                           SERVICE              OPERATION                 DURATION  SPANS ERRORS
+          ---------------------------------- -------------------- ------------------------- ---------- ------ ------
+          trace_search_slow_1                search-service       GET /api/search              5800ms      5      1
+
+  trace_get:
+    - match:
+        trace_id: "trace_search_slow_1"
+      result:
+        status: "success"
+        data: |
+          Trace: trace_search_slow_1
+          Spans: 5 | Errors: 1
+
+          └─ search-service::GET /api/search (5800.0ms) ❌ ERROR ⚠️ SLOW
+             ├─ search-service::checkCache (2.0ms) [cache.hit=false, cache.size=4523]
+             ├─ search-service::executeQuery (1200.0ms) ⚠️ SLOW
+             │  └─ elasticsearch::_search (1150.0ms) ⚠️ SLOW
+             └─ search-service::gcPause (4500.0ms) ⚠️ SLOW [gc.type=full, gc.cause="Allocation Failure"]
+
+    - match:
+        trace_id: "trace_search_slow_2"
+      result:
+        status: "success"
+        data: |
+          Trace: trace_search_slow_2
+          Spans: 4 | Errors: 0
+
+          └─ search-service::GET /api/search (4200.0ms) ⚠️ SLOW
+             ├─ search-service::checkCache (1.5ms) [cache.hit=true]
+             ├─ search-service::formatResults (12.0ms)
+             └─ search-service::gcPause (4100.0ms) ⚠️ SLOW [gc.type=full, gc.cause="Allocation Failure"]
+
+  trace_services:
+    - match: {}
+      result:
+        status: "success"
+        data: |
+          elasticsearch
+          frontend
+          order-service
+          search-service
+
+ground_truth:
+  root_cause_service: "search-service"
+  root_cause_type: "config-drift-memory-leak"
+
+  key_signals:
+    - signal: "cache.ttl 从 3600 改为 -1 (infinite) / 配置变更"
+      required: true
+    - signal: "内存单调增长 / 泄漏 / monotonic increase"
+      required: true
+    - signal: "GC 停顿时间随时间增长 / Full GC pause"
+      required: true
+    - signal: "凌晨 2:05 配置变更时间点与问题开始时间吻合"
+      required: true
+    - signal: "缓存条目无限增长 / 4523 entries 1.2GB / ttl=INFINITE"
+      required: false
+    - signal: "log.level 改为 DEBUG 导致线程泄漏 / thread per request"
+      required: false
+    - signal: "值班人员说只改了日志级别但实际还改了 cache.ttl"
+      required: false
+
+  wrong_conclusions:
+    - "Elasticsearch 性能问题"
+    - "流量增长导致 OOM"
+    - "仅日志级别变更导致问题"
+    - "search-service 代码 bug 导致内存泄漏（是配置引入的）"
+    - "order-service 相关"

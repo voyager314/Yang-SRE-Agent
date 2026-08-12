@@ -1,0 +1,264 @@
+id: "slow-query-connection-pool"
+description: "数据库慢查询导致连接池耗尽，表现为随机服务超时，需要跨指标+日志+trace关联"
+category: "resource-exhaustion"
+difficulty: "medium"
+
+question: "用户报告 user-service 响应变慢，部分请求超时。过去 1 小时逐渐恶化，请诊断。"
+
+tool_responses:
+
+  alertmanager_list:
+    - match: {}
+      result:
+        status: "success"
+        data: |
+          [WARNING] (2 alerts)
+          ----------------------------------------
+            HighLatencyP99 | ns=production | service=user-service
+              P99 latency above 3s for user-service
+            PostgresConnectionPoolExhausted | ns=production | pod=user-service-db-pool
+              Active connections at 95% of max pool size
+
+          [INFO] (1 alert)
+          ----------------------------------------
+            PostgresSlowQueries | ns=production
+              Slow query count above threshold (12 queries > 1s)
+
+  prometheus_query:
+    - match:
+        query_contains: "duration"
+      result:
+        status: "success"
+        data: |
+          {service="user-service", quantile="0.99"} => 4.5
+          {service="user-service", quantile="0.50"} => 0.85
+          {service="auth-service", quantile="0.99"} => 0.12
+          {service="notification-service", quantile="0.99"} => 0.15
+
+    - match:
+        query_contains: "pool"
+      result:
+        status: "success"
+        data: |
+          {service="user-service", state="active"} => 47
+          {service="user-service", state="idle"} => 3
+          {service="user-service", state="max"} => 50
+
+    - match:
+        query_contains: "error"
+      result:
+        status: "success"
+        data: |
+          {service="user-service", code="504"} => 8.2
+          {service="user-service", code="200"} => 342.5
+          {service="user-service", code="500"} => 2.1
+
+    - match:
+        query_contains: "memory"
+      result:
+        status: "success"
+        data: |
+          {container="user-service"} => 380000000
+          {container="user-service", limit="memory"} => 1073741824
+
+    - match:
+        query_contains: "cpu"
+      result:
+        status: "success"
+        data: |
+          {container="user-service"} => 0.42
+          {container="postgres"} => 0.88
+
+    - match:
+        query_contains: "postgres"
+      result:
+        status: "success"
+        data: |
+          {datname="userdb", state="active"} => 47
+          {datname="userdb", state="idle"} => 3
+          {datname="userdb", waiting="true"} => 12
+
+    - match:
+        query_contains: "slow"
+      result:
+        status: "success"
+        data: |
+          {datname="userdb"} => 12
+
+    - match:
+        query_contains: "up"
+      result:
+        status: "success"
+        data: |
+          {job="user-service"} => 1
+          {job="postgres"} => 1
+
+    - match:
+        query_contains: "request"
+      result:
+        status: "success"
+        data: |
+          {service="user-service"} => 352.8
+
+  prometheus_query_range:
+    - match:
+        query_contains: "pool"
+      result:
+        status: "success"
+        data: |
+          {service="user-service", state="active"}:
+            [1723452000] 18
+            [1723453200] 25
+            [1723454400] 33
+            [1723455600] 41
+            [1723456800] 47
+
+    - match:
+        query_contains: "duration"
+      result:
+        status: "success"
+        data: |
+          {service="user-service", quantile="0.99"}:
+            [1723452000] 0.25
+            [1723453200] 0.8
+            [1723454400] 1.8
+            [1723455600] 3.2
+            [1723456800] 4.5
+
+    - match:
+        query_contains: "slow"
+      result:
+        status: "success"
+        data: |
+          {datname="userdb"}:
+            [1723452000] 0
+            [1723453200] 2
+            [1723454400] 5
+            [1723455600] 9
+            [1723456800] 12
+
+    - match:
+        query_contains: "cpu"
+      result:
+        status: "success"
+        data: |
+          {container="postgres"}:
+            [1723452000] 0.35
+            [1723453200] 0.52
+            [1723454400] 0.68
+            [1723455600] 0.79
+            [1723456800] 0.88
+
+  loki_query:
+    - match:
+        query_contains: "user-service"
+      result:
+        status: "success"
+        data: |
+          [app="user-service"] 2024-08-12T10:50:12Z ERROR - failed to acquire database connection within 5000ms: pool exhausted (active=50, max=50)
+          [app="user-service"] 2024-08-12T10:50:10Z WARN - connection pool utilization at 94% (47/50)
+          [app="user-service"] 2024-08-12T10:49:55Z WARN - slow database query detected: SELECT * FROM users u JOIN user_preferences up ON u.id = up.user_id JOIN user_sessions us ON u.id = us.user_id WHERE u.last_login > '2024-07-01' (duration: 3.2s)
+          [app="user-service"] 2024-08-12T10:49:30Z WARN - connection pool utilization at 82% (41/50)
+          [app="user-service"] 2024-08-12T10:48:00Z INFO - executing batch user preference sync job
+          [app="user-service"] 2024-08-12T10:45:12Z WARN - slow database query detected: SELECT * FROM users u JOIN user_preferences up ON u.id = up.user_id WHERE ... (duration: 2.1s)
+
+    - match:
+        query_contains: "postgres"
+      result:
+        status: "success"
+        data: |
+          [app="postgres"] 2024-08-12T10:50:01Z LOG - duration: 3245.123 ms  statement: SELECT * FROM users u JOIN user_preferences up ON u.id = up.user_id JOIN user_sessions us ON u.id = us.user_id WHERE u.last_login > '2024-07-01'
+          [app="postgres"] 2024-08-12T10:49:45Z LOG - duration: 2812.456 ms  statement: SELECT * FROM users u JOIN user_preferences up ON u.id = up.user_id WHERE u.region = 'us-east' AND u.status = 'active'
+          [app="postgres"] 2024-08-12T10:49:30Z WARNING - 12 queries currently waiting for locks
+          [app="postgres"] 2024-08-12T10:48:05Z LOG - auto_explain: plan for slow query: Seq Scan on user_sessions (cost=0.00..45123.00 rows=2500000) - missing index on user_sessions.user_id
+
+    - match:
+        query_contains: "error"
+      result:
+        status: "success"
+        data: |
+          [app="user-service"] 2024-08-12T10:50:12Z ERROR - failed to acquire database connection within 5000ms: pool exhausted
+          [app="user-service"] 2024-08-12T10:50:15Z ERROR - request timeout: GET /api/users/profile
+          [app="user-service"] 2024-08-12T10:50:18Z ERROR - failed to acquire database connection within 5000ms: pool exhausted
+
+  trace_search:
+    - match:
+        service: "user-service"
+      result:
+        status: "success"
+        data: |
+          TRACE ID                           SERVICE              OPERATION                 DURATION  SPANS ERRORS
+          ---------------------------------- -------------------- ------------------------- ---------- ------ ------
+          trace_slow_001                     user-service         GET /api/users/profile       4500ms      6      1
+          trace_slow_002                     user-service         GET /api/users/list          3200ms      5      0
+          trace_fast_003                     user-service         GET /api/users/profile        120ms      4      0
+
+    - match: {}
+      result:
+        status: "success"
+        data: |
+          TRACE ID                           SERVICE              OPERATION                 DURATION  SPANS ERRORS
+          ---------------------------------- -------------------- ------------------------- ---------- ------ ------
+          trace_slow_001                     user-service         GET /api/users/profile       4500ms      6      1
+
+  trace_get:
+    - match:
+        trace_id: "trace_slow_001"
+      result:
+        status: "success"
+        data: |
+          Trace: trace_slow_001
+          Spans: 6 | Errors: 1
+
+          └─ user-service::GET /api/users/profile (4500.0ms) ❌ ERROR ⚠️ SLOW
+             ├─ user-service::acquireConnection (3800.0ms) ⚠️ SLOW [pool.wait_ms=3800]
+             ├─ user-service::queryUserProfile (580.0ms)
+             │  └─ postgres::SELECT users JOIN user_preferences (560.0ms)
+             └─ auth-service::validateToken (45.0ms)
+
+    - match:
+        trace_id: "trace_slow_002"
+      result:
+        status: "success"
+        data: |
+          Trace: trace_slow_002
+          Spans: 5 | Errors: 0
+
+          └─ user-service::GET /api/users/list (3200.0ms) ⚠️ SLOW
+             ├─ user-service::acquireConnection (200.0ms)
+             ├─ user-service::queryUserList (2850.0ms) ⚠️ SLOW
+             │  └─ postgres::SELECT users JOIN user_sessions (2830.0ms) ⚠️ SLOW
+             └─ auth-service::validateToken (42.0ms)
+
+  trace_services:
+    - match: {}
+      result:
+        status: "success"
+        data: |
+          auth-service
+          notification-service
+          postgres
+          user-service
+
+ground_truth:
+  root_cause_service: "postgres"
+  root_cause_type: "slow-query"
+
+  key_signals:
+    - signal: "慢查询 / slow query / duration 2-3s"
+      required: true
+    - signal: "连接池耗尽 / pool exhausted / active=47-50/50"
+      required: true
+    - signal: "缺少索引 / missing index on user_sessions.user_id / Seq Scan"
+      required: false
+    - signal: "batch job 触发 / batch user preference sync"
+      required: false
+    - signal: "等待锁 / waiting for locks / 12 queries waiting"
+      required: false
+
+  wrong_conclusions:
+    - "user-service 代码性能问题"
+    - "auth-service 导致延迟"
+    - "内存泄漏"
+    - "网络超时"
+    - "notification-service 相关"

@@ -6,3 +6,5 @@ src/temp/
 **/__pycache__/
 .mypy_cache/
 compression_policy.md
+.env
+eval/results/

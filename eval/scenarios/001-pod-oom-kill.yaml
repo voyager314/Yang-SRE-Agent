@@ -1,0 +1,189 @@
+id: "pod-oom-kill"
+description: "Pod 因 OOM 被 Kill，导致服务间歇性 5xx"
+category: "resource-exhaustion"
+difficulty: "easy"
+
+question: "生产环境 checkout-service 过去 30 分钟出现间歇性 500 错误，请诊断根因。"
+
+tool_responses:
+
+  alertmanager_list:
+    - match: {}
+      result:
+        status: "success"
+        data: |
+          [CRITICAL] (1 alert)
+          ----------------------------------------
+            KubePodCrashLooping | ns=production | pod=checkout-service-7d8f9-abc12
+              Pod is crash looping (restart count: 5)
+
+          [WARNING] (2 alerts)
+          ----------------------------------------
+            HighErrorRate | ns=production
+              Error rate above 5% for checkout-service
+            KubeContainerOOMKilled | ns=production | pod=checkout-service-7d8f9-abc12
+              Container was OOM killed
+
+  prometheus_query:
+    - match:
+        query_contains: "restart"
+      result:
+        status: "success"
+        data: |
+          {container="checkout", namespace="production", pod="checkout-service-7d8f9-abc12"} => 5
+
+    - match:
+        query_contains: "memory"
+      result:
+        status: "success"
+        data: |
+          {container="checkout", namespace="production"} => 524288000
+
+    - match:
+        query_contains: "limits"
+      result:
+        status: "success"
+        data: |
+          {container="checkout", resource="memory"} => 536870912
+
+    - match:
+        query_contains: "http"
+      result:
+        status: "success"
+        data: |
+          {service="checkout-service", code="500"} => 12.5
+          {service="checkout-service", code="200"} => 245.3
+
+    - match:
+        query_contains: "cpu"
+      result:
+        status: "success"
+        data: |
+          {container="checkout", namespace="production"} => 0.35
+
+    - match:
+        query_contains: "up"
+      result:
+        status: "success"
+        data: |
+          {job="checkout-service"} => 1
+
+  prometheus_query_range:
+    - match:
+        query_contains: "memory"
+      result:
+        status: "success"
+        data: |
+          {container="checkout", namespace="production"}:
+            [1723456000] 312000000
+            [1723456300] 398000000
+            [1723456600] 467000000
+            [1723456900] 521000000
+            [1723457200] 524288000
+            ... (showing upward trend)
+
+    - match:
+        query_contains: "http"
+      result:
+        status: "success"
+        data: |
+          {service="checkout-service", code="500"}:
+            [1723456000] 0
+            [1723456300] 0
+            [1723456600] 3.2
+            [1723456900] 8.7
+            [1723457200] 12.5
+
+  loki_query:
+    - match:
+        query_contains: "checkout"
+      result:
+        status: "success"
+        data: |
+          [app="checkout-service"] 2024-08-12T10:15:32Z java.lang.OutOfMemoryError: Java heap space
+          [app="checkout-service"] 2024-08-12T10:15:32Z   at com.checkout.CartService.processOrder(CartService.java:142)
+          [app="checkout-service"] 2024-08-12T10:15:32Z   at com.checkout.OrderController.submit(OrderController.java:89)
+          [app="checkout-service"] 2024-08-12T10:15:33Z Container killed by OOM killer: memory usage 512Mi exceeds limit 512Mi
+          [app="checkout-service"] 2024-08-12T10:15:34Z Pod restarting (attempt 5/10)
+          [app="checkout-service"] 2024-08-12T10:10:15Z WARN - High memory usage detected: 467MB/512MB (91%)
+          [app="checkout-service"] 2024-08-12T10:05:02Z WARN - GC overhead limit exceeded, pausing for 2.3s
+
+    - match:
+        query_contains: "error"
+      result:
+        status: "success"
+        data: |
+          [app="checkout-service"] 2024-08-12T10:15:32Z ERROR - java.lang.OutOfMemoryError: Java heap space
+          [app="checkout-service"] 2024-08-12T10:15:33Z ERROR - Container killed by OOM killer
+
+  trace_search:
+    - match:
+        service: "checkout-service"
+      result:
+        status: "success"
+        data: |
+          TRACE ID                           SERVICE              OPERATION                 DURATION  SPANS ERRORS
+          ---------------------------------- -------------------- ------------------------- ---------- ------ ------
+          abc123def456789a                   checkout-service     POST /api/orders             3200ms      8      1
+          abc123def456789b                   checkout-service     POST /api/orders              timeout     5      1
+          abc123def456789c                   checkout-service     GET /api/cart                  450ms      4      0
+
+    - match: {}
+      result:
+        status: "success"
+        data: |
+          TRACE ID                           SERVICE              OPERATION                 DURATION  SPANS ERRORS
+          ---------------------------------- -------------------- ------------------------- ---------- ------ ------
+          abc123def456789a                   checkout-service     POST /api/orders             3200ms      8      1
+
+  trace_get:
+    - match:
+        trace_id: "abc123def456789a"
+      result:
+        status: "success"
+        data: |
+          Trace: abc123def456789a
+          Spans: 8 | Errors: 1
+
+          └─ checkout-service::POST /api/orders (3200.0ms) ⚠️ SLOW
+             ├─ checkout-service::processCart (2800.0ms) ⚠️ SLOW
+             │  └─ checkout-service::calculateTotals (2500.0ms) ❌ ERROR ⚠️ SLOW [error=OutOfMemoryError]
+             ├─ inventory-service::checkStock (120.0ms)
+             └─ payment-service::authorize (80.0ms)
+
+    - match:
+        trace_id: "abc123def456789b"
+      result:
+        status: "error"
+        error: "Trace abc123def456789b not found (likely lost due to pod restart)"
+
+  trace_services:
+    - match: {}
+      result:
+        status: "success"
+        data: |
+          checkout-service
+          inventory-service
+          payment-service
+          frontend
+          recommendation-service
+
+ground_truth:
+  root_cause_service: "checkout-service"
+  root_cause_type: "oom-kill"
+
+  key_signals:
+    - signal: "OOM / OutOfMemoryError / 内存溢出"
+      required: true
+    - signal: "memory 接近 limit / 524MB/512MB"
+      required: true
+    - signal: "Pod 重启 / restart count 5 / CrashLooping"
+      required: false
+    - signal: "GC overhead / GC 停顿"
+      required: false
+
+  wrong_conclusions:
+    - "payment-service 是根因"
+    - "inventory-service 导致超时"
+    - "网络问题导致 500"
+    - "数据库连接问题"
