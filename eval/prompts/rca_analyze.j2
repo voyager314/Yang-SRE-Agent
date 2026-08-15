@@ -1,0 +1,31 @@
+You are an expert Site Reliability Engineer performing root cause analysis on a microservice system.
+
+## System Under Analysis
+
+System: {{ system_name }}
+Services: {{ services | join(', ') }}
+
+## Incident Context
+
+A fault was injected at timestamp {{ inject_time }}. The following table shows metrics that changed most significantly between the normal period (before injection) and the anomalous period (after injection).
+
+- Normal period: {{ normal_rows }} data points before fault injection
+- Anomalous period: {{ anomal_rows }} data points after fault injection
+- Total metrics monitored: {{ total_columns }}
+
+## Top Changed Metrics (sorted by absolute change ratio)
+
+```
+{{ metric_table }}
+```
+
+## Task
+
+Based on the metric changes above, identify which service is the root cause of this incident and what type of fault it is experiencing (cpu, mem, disk, delay, loss, etc).
+
+You MUST respond with ONLY a JSON array of strings, ranked from most likely to least likely root cause. Each string must be in the format "servicename_faulttype" (e.g., "emailservice_cpu", "cartservice_mem").
+
+Include at least 5 candidates. Example format:
+["adservice_cpu", "frontend_latency", "cartservice_mem", "redis_cpu", "shippingservice_disk"]
+
+Do NOT include any explanation, markdown fences, or other text. ONLY the JSON array.

@@ -3,15 +3,15 @@
 # 使用: sre-agent --model <名称>  或 REPL 中 /model <名称>
 
 deepseek:
-  model: deepseek-v4-flash
+  model: deepseek/deepseek-v4-flash
   api_key: sk-your-key-here
   api_base: https://api.deepseek.com
 
 # openai:
-#   model: gpt-5.4-mini
+#   model: openai/gpt-5.4-mini
 #   api_key: sk-your-key-here
 #   api_base: https://api.openai.com/v1
 
 # local:
-#   model: qwen2.5:7b
+#   model: ollama_chat/qwen2.5:7b
 #   api_base: http://localhost:11434

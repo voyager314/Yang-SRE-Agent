@@ -1,7 +1,7 @@
 """LLM-as-Judge 客户端，从根目录 .env 读取模型配置。"""
 
 from __future__ import annotations
-
+import litellm
 import json
 import logging
 import os
@@ -95,8 +95,6 @@ class Judge:
                 "converged": converged,
             },
         )
-
-        import litellm
 
         for attempt in range(retries):
             try:
