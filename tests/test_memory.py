@@ -138,6 +138,21 @@ class TestInvestigationSummary:
         assert meta["tools_used"] == ""
         assert meta["tags"] == ""
 
+    def test_to_chroma_metadata_carries_recovery_fields(self) -> None:
+        """根因等字段不进 embedding，必须靠 metadata 才能在归档缺失时还原。"""
+        summary = InvestigationSummary(
+            id="inv_test",
+            question="q",
+            conclusion="c",
+            root_cause="unclosed connections",
+            resolution="upgrade connection pool",
+            evidence_refs=["call_a", "call_b"],
+        )
+        meta = summary.to_chroma_metadata()
+        assert meta["root_cause"] == "unclosed connections"
+        assert meta["resolution"] == "upgrade connection pool"
+        assert meta["evidence_refs"] == "call_a,call_b"
+
     def test_generate_investigation_id_format(self) -> None:
         inv_id = _generate_investigation_id()
         assert inv_id.startswith("inv_")
@@ -243,6 +258,43 @@ class TestMemoryStoreSave:
         )
 
         assert result is None
+
+    def test_index_failure_keeps_archive(self, tmp_path: Path, caplog) -> None:
+        """索引写入失败时归档必须已经落盘，且失败不能被静默吞掉。"""
+        import logging
+
+        store, _ = self._make_store(tmp_path)
+        store._collection = MagicMock()
+        store._collection.upsert.side_effect = RuntimeError("chroma down")
+
+        with caplog.at_level(logging.WARNING, logger="sre_agent.core.memory_store"):
+            result = store.save_investigation(
+                question="pod 频繁重启",
+                answer="内存泄漏导致 OOM",
+                scratchpad=Scratchpad(),
+                tool_calls=[],
+                evidence_refs=[],
+            )
+
+        # JSON 先于索引写入，所以归档仍然存在。
+        assert result is not None
+        json_path = tmp_path / "memory" / "investigations" / f"{result.id}.json"
+        assert json_path.exists()
+        assert "无法被 recall 检索到" in caplog.text
+
+    def test_save_leaves_no_temp_file(self, tmp_path: Path) -> None:
+        store, _ = self._make_store(tmp_path)
+        result = store.save_investigation(
+            question="test",
+            answer="answer",
+            scratchpad=Scratchpad(),
+            tool_calls=[],
+            evidence_refs=[],
+        )
+
+        assert result is not None
+        archive_dir = tmp_path / "memory" / "investigations"
+        assert list(archive_dir.glob("*.tmp")) == []
 
     def test_save_handles_markdown_fenced_json(self, tmp_path: Path) -> None:
         mock_llm = MagicMock(spec=DefaultLLM)
@@ -368,6 +420,45 @@ class TestMemoryStoreRecall:
 
         results = store.recall("anything")
         assert results == []
+
+    def test_recall_recovers_root_cause_from_metadata(self, tmp_path: Path) -> None:
+        """归档缺失时，根因等字段必须能从 Chroma metadata 还原。"""
+        mock_llm = MagicMock(spec=DefaultLLM)
+        mock_llm.completion.return_value = ModelResponse(
+            content=json.dumps(
+                {
+                    "conclusion": "OOM due to leak",
+                    "root_cause": "unclosed connections",
+                    "resolution": "fix pool",
+                    "key_evidence": ["heap grew"],
+                    "tags": ["oom"],
+                }
+            ),
+        )
+
+        store = MemoryStore(
+            embedder=_FakeEmbedder(),
+            llm=mock_llm,
+            memory_dir=tmp_path / "memory",
+            score_threshold=0.0,
+        )
+        saved = store.save_investigation(
+            question="pod OOM",
+            answer="memory leak",
+            scratchpad=Scratchpad(),
+            tool_calls=[],
+            evidence_refs=["call_abc"],
+        )
+        assert saved is not None
+
+        # 删掉 JSON 归档，强制走降级还原路径。
+        (tmp_path / "memory" / "investigations" / f"{saved.id}.json").unlink()
+
+        results = store.recall("OOM 问题")
+        assert len(results) == 1
+        assert results[0].root_cause == "unclosed connections"
+        assert results[0].resolution == "fix pool"
+        assert results[0].evidence_refs == ["call_abc"]
 
 
 # ---------------------------------------------------------------------------

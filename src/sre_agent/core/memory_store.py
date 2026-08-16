@@ -49,9 +49,15 @@ class InvestigationSummary(BaseModel):
         """提取适合 ChromaDB metadata 存储的扁平字典。
 
         ChromaDB metadata 值仅支持 str、int、float、bool，列表字段用逗号拼接。
+        root_cause、resolution、evidence_refs 对语义检索本身没有用处（它们不进
+        embedding），存在这里纯粹是为了 JSON 归档缺失时 _reconstruct_summary()
+        仍能还原出记忆中最有价值的部分——根因和解决方案无法从 document 反推。
         """
 
         return {
+            "root_cause": self.root_cause,
+            "resolution": self.resolution,
+            "evidence_refs": ",".join(self.evidence_refs),
             "tools_used": ",".join(self.tools_used),
             "tags": ",".join(self.tags),
             "timestamp": self.timestamp,
@@ -237,23 +243,42 @@ class MemoryStore:
         )
 
     def _persist(self, summary: InvestigationSummary) -> None:
-        """将 InvestigationSummary 双写到 ChromaDB 和 JSON 文件。"""
+        """将 InvestigationSummary 双写到 JSON 归档和 ChromaDB。
+
+        写入顺序是有意的：JSON 是真相源，必须先于索引落盘。若顺序相反且中途失败，
+        Chroma 里会残留一条查得到却读不回归档的记忆，recall() 只能走降级还原，
+        把可能错位的内容注入下一次调查；反过来失败只是这条记忆检索不到，不会污染
+        上下文。embedding 在两次写入之前算好，让最可能失败的一步不留下半套数据。
+        """
 
         embedding_text = summary.to_embedding_text()
         embedding = self._embedder.embed([embedding_text])[0]
 
-        self._collection.upsert(
-            ids=[summary.id],
-            embeddings=[embedding],  # type: ignore[arg-type]
-            documents=[embedding_text],
-            metadatas=[summary.to_chroma_metadata()],
-        )
-
+        # 先写临时文件再原子改名：进程若在写入中途被杀，留下的是 .tmp 而不是半截
+        # JSON——后者会让 _reconstruct_summary() 解析失败，进而使整批 recall 结果被丢弃。
         json_path = self._archive_dir / f"{summary.id}.json"
-        json_path.write_text(
+        tmp_path = self._archive_dir / f"{summary.id}.json.tmp"
+        tmp_path.write_text(
             summary.model_dump_json(indent=2),
             encoding="utf-8",
         )
+        tmp_path.replace(json_path)
+
+        try:
+            self._collection.upsert(
+                ids=[summary.id],
+                embeddings=[embedding],  # type: ignore[arg-type]
+                documents=[embedding_text],
+                metadatas=[summary.to_chroma_metadata()],
+            )
+        except Exception:
+            # 归档已落盘，这条记忆不会丢，只是检索不到。显式告警而不是让调用方
+            # 以为整条链路都成功了。
+            logger.warning(
+                "调查 %s 已归档但索引写入失败，该条记忆无法被 recall 检索到",
+                summary.id,
+                exc_info=True,
+            )
 
     def _reconstruct_summary(
         self,
@@ -281,14 +306,19 @@ class MemoryStore:
 
         tools_str: str = metadata.get("tools_used", "")
         tags_str: str = metadata.get("tags", "")
+        evidence_refs_str: str = metadata.get("evidence_refs", "")
 
         return InvestigationSummary(
             id=inv_id,
             question=question,
             conclusion=conclusion,
+            # 根因和解决方案没有进 embedding，document 里不存在，只能取自 metadata。
+            root_cause=metadata.get("root_cause", ""),
+            resolution=metadata.get("resolution", ""),
             key_evidence=key_evidence,
             tools_used=tools_str.split(",") if tools_str else [],
             tags=tags_str.split(",") if tags_str else [],
             timestamp=metadata.get("timestamp", ""),
+            evidence_refs=evidence_refs_str.split(",") if evidence_refs_str else [],
             converged=bool(metadata.get("converged", False)),
         )
