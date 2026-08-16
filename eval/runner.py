@@ -57,7 +57,11 @@ _RESULTS_DIR = _EVAL_DIR / "results"
 
 
 def load_scenario(path: Path) -> dict[str, Any]:
-    """加载单个场景 YAML 文件。"""
+    """加载单个场景 YAML 文件。
+
+    返回值是场景的顶层映射，通常包含 ``id``、``question``、``ground_truth``
+    和 ``tool_responses``。空文件被视为配置错误并抛出 ``ValueError``。
+    """
 
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
@@ -67,7 +71,11 @@ def load_scenario(path: Path) -> dict[str, Any]:
 
 
 def discover_scenarios(scenarios_dir: Path, scenario_filter: str | None = None) -> list[Path]:
-    """发现目录下所有场景文件，可选按 ID 过滤。"""
+    """发现目录下所有 ``.yaml``/``.yml`` 场景文件，可选按 ID 过滤。
+
+    返回路径按文件名排序，保证多次评测的执行顺序和输出顺序稳定。
+    ``scenario_filter`` 使用简单的子串匹配，而不是正则表达式。
+    """
 
     files = sorted(scenarios_dir.glob("*.yaml")) + sorted(scenarios_dir.glob("*.yml"))
     if scenario_filter:
@@ -87,7 +95,12 @@ def _build_eval_engine(
     api_base: str,
     max_steps: int = 30,
 ) -> tuple[Engine, list[Any]]:
-    """用 Mock 工具构建 Engine，返回 (engine, mock_tools)。"""
+    """用场景中的 Mock 工具构建 Engine。
+
+    返回二元组 ``(engine, mock_tools)``：前者负责驱动 Agent，后者保留调用日志，
+    供评测结果记录。``model``、``api_key`` 和 ``api_base`` 仅用于配置 Agent 的
+    LLM；数据查询本身完全由 Mock 响应提供，不依赖真实基础设施。
+    """
 
     llm = DefaultLLM(
         model=model,
@@ -132,7 +145,16 @@ def run_scenario(
     api_base: str,
     max_steps: int = 30,
 ) -> dict[str, Any]:
-    """执行单个场景，返回 Agent 的完整输出。"""
+    """执行单个场景并返回可序列化的 Agent 输出快照。
+
+    返回映射字段说明：
+    - ``answer``：Agent 最终诊断文本。
+    - ``tool_calls``：Engine 记录的工具调用明细。
+    - ``iterations``/``converged``：执行步数及是否达到收敛/停止条件。
+    - ``scratchpad``：调查期间的 findings、hypotheses、ruled_out、next_steps。
+    - ``elapsed_seconds``：本场景总耗时（秒）。
+    - ``mock_call_logs``：每个 Mock 工具实际收到的参数列表。
+    """
 
     engine, mock_tools = _build_eval_engine(scenario, model, api_key, api_base, max_steps)
 
@@ -159,17 +181,17 @@ def run_scenario(
     sp = engine.context_manager.scratchpad if engine.context_manager else Scratchpad()
 
     return {
-        "answer": result.answer,
-        "tool_calls": result.tool_calls,
-        "iterations": result.iterations,
-        "converged": result.converged,
+        "answer": result.answer,  # 面向用户的最终答案。
+        "tool_calls": result.tool_calls,  # 工具名称、参数和返回值等调用轨迹。
+        "iterations": result.iterations,  # Engine 消耗的推理迭代数。
+        "converged": result.converged,  # 是否正常收敛；False 可能表示达到上限。
         "scratchpad": {
-            "findings": list(sp.findings),
-            "hypotheses": list(sp.hypotheses),
-            "ruled_out": list(sp.ruled_out),
-            "next_steps": list(sp.next_steps),
+            "findings": list(sp.findings),  # 已由证据支持的观察结论。
+            "hypotheses": list(sp.hypotheses),  # 尚待验证的候选根因。
+            "ruled_out": list(sp.ruled_out),  # 已被证据排除的假设。
+            "next_steps": list(sp.next_steps),  # Agent 计划继续执行的调查动作。
         },
-        "elapsed_seconds": round(elapsed, 2),
+        "elapsed_seconds": round(elapsed, 2),  # 四舍五入到小数点后两位。
         "mock_call_logs": {
             tool.name: tool.call_log
             for tool in mock_tools
@@ -229,6 +251,7 @@ def main() -> None:
     scorer = Scorer(judge=judge)
 
     # 运行评测。
+    # 每项对应一个场景；成功项含 ``scores``，失败项含 ``error``。
     all_results: list[dict[str, Any]] = []
 
     for scenario_path in scenario_files:

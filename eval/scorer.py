@@ -18,23 +18,27 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class DimensionScore:
-    """单维度评分结果。"""
+    """单维度评分结果，分数统一归一化到 0~1。
 
-    name: str
-    score: float  # 归一化到 0-1
-    max_score: float = 1.0
-    method: str = ""  # "rule" | "llm" | "rule+llm"
-    details: str = ""
+    ``method`` 标记分数来源，``details`` 保存简短证据，便于在结果 JSON 中
+    解释为什么得到该分数。
+    """
+
+    name: str  # 维度标识：root_cause、signal_coverage、reasoning、efficiency 或 report。
+    score: float  # 实际得分，归一化到 0~1。
+    max_score: float = 1.0  # 理论满分，当前保留字段以兼容扩展。
+    method: str = ""  # 评分来源：rule、llm、rule+llm 或 skipped。
+    details: str = ""  # 面向人的证据/计算摘要，不参与数值计算。
 
 
 @dataclass
 class EvalResult:
-    """一个场景的完整评分结果。"""
+    """一个场景的完整评分结果及其加权总分。"""
 
-    scenario_id: str
-    dimensions: list[DimensionScore] = field(default_factory=list)
-    composite: float = 0.0
-    llm_judge_raw: dict[str, Any] = field(default_factory=dict)
+    scenario_id: str  # 场景 ID，用于和输入 YAML 及报告记录关联。
+    dimensions: list[DimensionScore] = field(default_factory=list)  # 各评分维度明细。
+    composite: float = 0.0  # 按 WEIGHTS 加权后的综合分数（0~1）。
+    llm_judge_raw: dict[str, Any] = field(default_factory=dict)  # Judge 原始归一化响应。
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -53,11 +57,11 @@ class EvalResult:
 # ────────────────────────────────────────────────────────────
 
 WEIGHTS = {
-    "root_cause": 0.30,
-    "signal_coverage": 0.15,
-    "reasoning": 0.25,
-    "efficiency": 0.10,
-    "report": 0.20,
+    "root_cause": 0.30,  # 是否定位到正确服务及故障类型。
+    "signal_coverage": 0.15,  # 是否覆盖 ground_truth 声明的关键观测信号。
+    "reasoning": 0.25,  # 调查过程是否有证据链和合理推理。
+    "efficiency": 0.10,  # 工具调用数量、重复率及是否被迫停止。
+    "report": 0.20,  # 最终报告是否清晰、可执行且对用户有帮助。
 }
 
 
@@ -77,7 +81,11 @@ def score_root_cause_rule(
     scratchpad: dict[str, Any],
     ground_truth: dict[str, Any],
 ) -> float:
-    """维度 1: 根因定位（规则评分）。"""
+    """维度 1：根因定位（规则评分，满分 1.0）。
+
+    服务名和故障类型各占 0.4 分；没有复述 ground truth 中的错误结论再得
+    0.2 分。文本来源同时包含最终答案、调查发现和候选假设。
+    """
 
     text = _normalize_text(
         answer,
@@ -132,7 +140,11 @@ def score_signal_coverage_rule(
     scratchpad: dict[str, Any],
     ground_truth: dict[str, Any],
 ) -> float:
-    """维度 2: 关键信号覆盖率（规则评分）。"""
+    """维度 2：关键信号覆盖率（规则评分）。
+
+    必需信号贡献 0.8 分，可选信号贡献 0.2 分；每个信号用 ``/`` 分隔同义
+    关键词，命中任意一个关键词即视为识别。
+    """
 
     text = _normalize_text(answer, *scratchpad.get("findings", []))
 
@@ -162,7 +174,11 @@ def score_efficiency_rule(
     converged: bool,
     max_steps: int = 30,
 ) -> float:
-    """维度 E: 工具使用效率（纯规则）。"""
+    """维度 E：工具使用效率（纯规则，初始分 1.0，按浪费行为扣分）。
+
+    过多调用、重复的 name+arguments，以及 ``converged`` 为真（通常表示
+    达到步数上限）都会扣分；结果始终截断在 0~1。
+    """
 
     score = 1.0
 
@@ -199,7 +215,7 @@ def score_efficiency_rule(
 
 
 class Scorer:
-    """混合评分器：规则打底 + LLM-as-Judge 补位。"""
+    """混合评分器：规则打底，必要时由 LLM-as-Judge 补充语义判断。"""
 
     def __init__(self, judge: Judge | None = None) -> None:
         self.judge = judge
@@ -214,7 +230,12 @@ class Scorer:
         iterations: int = 0,
         converged: bool = False,
     ) -> EvalResult:
-        """运行完整评分管道，返回多维度结果。"""
+        """运行完整评分管道，返回多维度结果。
+
+        ``ground_truth`` 和 ``scratchpad`` 的字段含义与 Judge Prompt 保持一致；
+        ``tool_calls``、``iterations``、``converged`` 仅用于效率维度和 Judge 上下文。
+        当未提供 Judge 时，推理和报告维度会标记为 ``skipped`` 并计 0 分。
+        """
 
         result = EvalResult(scenario_id=scenario_id)
 

@@ -31,6 +31,7 @@ from eval.data_loader import discover_cases, load_and_summarize
 from eval.metrics import Evaluator
 
 FAULT_DISPLAY = {
+    # 数据集目录中的故障键 -> 终端报告使用的展示名称。
     "cpu": "CPU",
     "mem": "MEM",
     "disk": "DISK",
@@ -41,18 +42,23 @@ FAULT_DISPLAY = {
 
 
 def parse_args() -> argparse.Namespace:
+    """解析命令行参数；各参数含义也会显示在 ``--help`` 中。"""
     parser = argparse.ArgumentParser(description="Run RCAEval benchmark against sre-agent")
-    parser.add_argument("--data-dir", required=True, help="Path to dataset case directory (e.g., .../RE1-OB/RE1-OB)")
-    parser.add_argument("--dataset", required=True, help="Dataset identifier (re1-ob, re1-ss, etc.)")
-    parser.add_argument("--model", required=True, help="LLM model name or registry key")
-    parser.add_argument("--test", action="store_true", help="Smoke test: run only first 2 cases")
-    parser.add_argument("--output", default="eval/results", help="Output directory for results JSON")
-    parser.add_argument("--length", type=int, default=20, help="Time window in minutes (default 20)")
+    parser.add_argument("--data-dir", required=True, help="数据集 case 根目录（例如 .../RE1-OB/RE1-OB）")
+    parser.add_argument("--dataset", required=True, help="数据集标识（re1-ob、re1-ss 等）")
+    parser.add_argument("--model", required=True, help="模型名或配置文件中的模型注册键")
+    parser.add_argument("--test", action="store_true", help="冒烟测试：只运行排序后的前 2 个 case")
+    parser.add_argument("--output", default="eval/results", help="结果 JSON 的输出目录")
+    parser.add_argument("--length", type=int, default=20, help="正常/异常合计时间窗口（分钟，默认 20）")
     return parser.parse_args()
 
 
 def _service_for_eval(s: str) -> str:
-    """Normalize service name for evaluation, matching RCAEval convention."""
+    """按 RCAEval 约定规范化服务名。
+
+    数据中 ``foo-db`` 表示数据库伴生服务，但评分只比较逻辑服务 ``foo``，
+    因此这里统一去掉 ``-db`` 后缀。
+    """
     return s.replace("-db", "")
 
 
@@ -81,12 +87,13 @@ def main() -> None:
         api_version=model_entry.api_version,
     )
 
+    # 每种 fault 一个独立聚合器；overall 跨全部 fault 汇总。
     evaluators: dict[str, Evaluator] = {}
     overall = Evaluator()
 
-    case_results: list[dict] = []
-    total_elapsed = 0.0
-    errors = 0
+    case_results: list[dict] = []  # 每个 case 的预测、命中情况和错误信息。
+    total_elapsed = 0.0  # 成功 case 的 LLM 调用耗时总和（秒）。
+    errors = 0  # 执行失败的 case 数量，不计入 Evaluator 分母。
 
     for i, case in enumerate(cases, 1):
         label = f"{case.service}_{case.fault}/{case.case_id}"
@@ -94,6 +101,7 @@ def main() -> None:
             summary = load_and_summarize(case, length_minutes=args.length)
             result = analyze_case(llm, summary, args.dataset)
 
+            # 模型输出的是 service_metric，评分只看服务；同时去重保持排名顺序。
             pred_services: list[str] = []
             seen: set[str] = set()
             for r in result.ranks:
@@ -102,7 +110,7 @@ def main() -> None:
                     seen.add(svc)
                     pred_services.append(svc)
 
-            answer_service = _service_for_eval(case.service)
+            answer_service = _service_for_eval(case.service)  # 真实根因服务。
 
             overall.add_case(pred_services, answer_service)
 
@@ -116,14 +124,14 @@ def main() -> None:
             print(f"[{i}/{len(cases)}] {label} -> {top1} {hit} ({result.elapsed:.1f}s)")
 
             case_results.append({
-                "case": label,
-                "service": case.service,
-                "fault": case.fault,
-                "answer_service": answer_service,
-                "predicted_ranks": result.ranks,
-                "predicted_services": pred_services[:5],
-                "ac1": 1.0 if top1 == answer_service else 0.0,
-                "elapsed": round(result.elapsed, 2),
+                "case": label,  # 可读标签：service_fault/case_id。
+                "service": case.service,  # 数据集原始服务名。
+                "fault": case.fault,  # 数据集原始故障类型。
+                "answer_service": answer_service,  # 规范化后的真实服务。
+                "predicted_ranks": result.ranks,  # 模型返回的 service_metric 排名。
+                "predicted_services": pred_services[:5],  # 去重后的 Top-5 服务排名。
+                "ac1": 1.0 if top1 == answer_service else 0.0,  # 本 case 的 AC@1。
+                "elapsed": round(result.elapsed, 2),  # 本 case 的 LLM 调用耗时（秒）。
             })
             total_elapsed += result.elapsed
 
@@ -166,17 +174,19 @@ def main() -> None:
     output_dir = Path(args.output).absolute()
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    t=args.model
+    args.model=t[t.index('/')+1:]
     output_file = output_dir / f"{args.dataset}_{args.model}_{timestamp}.json"
 
     report = {
-        "dataset": args.dataset,
-        "model": args.model,
-        "total_cases": len(cases),
-        "errors": errors,
-        "ac1": ac1,
-        "ac5": ac5,
-        "avg5": avg5,
-        "avg_speed": round(avg_speed, 2),
+        "dataset": args.dataset,  # 数据集标识。
+        "model": args.model,  # 实际用于调用的模型名（去掉 provider 前缀后的文件名版本）。
+        "total_cases": len(cases),  # 计划运行的 case 总数，包含失败项。
+        "errors": errors,  # 运行失败的 case 数。
+        "ac1": ac1,  # 全部成功 case 的 AC@1。
+        "ac5": ac5,  # 全部成功 case 的 AC@5。
+        "avg5": avg5,  # 全部成功 case 的 Avg@5。
+        "avg_speed": round(avg_speed, 2),  # 平均每个成功 case 的耗时（秒）。
         "per_fault": {
             fault_key: {
                 "count": ev.count,

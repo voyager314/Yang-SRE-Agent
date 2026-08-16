@@ -30,10 +30,11 @@ class MockTool(Tool):
         responses: list[dict[str, Any]],
     ) -> None:
         super().__init__(name=name, description=description, parameters=parameters)
-        self.responses = responses
-        self.call_log: list[dict[str, Any]] = []
+        self.responses = responses  # 按 YAML 顺序排列的匹配规则及预录结果。
+        self.call_log: list[dict[str, Any]] = []  # Agent 每次调用传入的参数快照。
 
     def _invoke(self, params: dict[str, Any]) -> StructuredToolResult:
+        """记录调用并返回第一条匹配的响应；无匹配时返回 ``NO_DATA``。"""
         self.call_log.append(dict(params))
 
         for resp in self.responses:
@@ -44,7 +45,11 @@ class MockTool(Tool):
         return StructuredToolResult(status=ToolResultStatus.NO_DATA)
 
     def _matches(self, params: dict[str, Any], match_spec: dict[str, Any]) -> bool:
-        """检查参数是否匹配给定规格。"""
+        """检查调用参数是否满足一条 YAML ``match`` 规格。
+
+        普通键使用不区分大小写的字符串精确比较；以 ``_contains`` 结尾的键
+        去掉后缀后按不区分大小写的子串比较。规格为空表示无条件匹配。
+        """
 
         if not match_spec:
             return True
@@ -79,7 +84,11 @@ class MockTool(Tool):
 
     @staticmethod
     def _build_result(result_spec: dict[str, Any]) -> StructuredToolResult:
-        """从场景 YAML 的 result 定义构建 StructuredToolResult。"""
+        """从 YAML 的 ``result`` 字段构建统一工具结果。
+
+        ``status`` 是 ``ToolResultStatus`` 枚举值（默认 ``success``）；
+        ``data`` 保存工具返回的结构化载荷，``error`` 保存失败时的人类可读原因。
+        """
 
         status_str = result_spec.get("status", "success")
         status = ToolResultStatus(status_str)
@@ -95,6 +104,7 @@ class MockTool(Tool):
 # ────────────────────────────────────────────────────────────
 
 _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
+    # 这些 schema 只用于向 LLM 描述可调用函数，不会执行真实 Prometheus/Loki 请求。
     "prometheus_query": {
         "type": "object",
         "properties": {"query": {"type": "string", "description": "PromQL expression"}},
@@ -168,7 +178,11 @@ _TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
 
 
 def build_mock_tools(tool_responses: dict[str, list[dict[str, Any]]]) -> list[Tool]:
-    """从场景 YAML 的 tool_responses 段构建 Mock 工具列表。"""
+    """从场景 YAML 的 ``tool_responses`` 映射构建 Mock 工具列表。
+
+    映射键是工具名，值是该工具按优先顺序尝试的响应列表；未登记的工具也会
+    被创建，只是使用空参数 schema，方便评测场景快速扩展。
+    """
 
     tools: list[Tool] = []
     for tool_name, responses in tool_responses.items():
@@ -186,7 +200,7 @@ def build_mock_tools(tool_responses: dict[str, list[dict[str, Any]]]) -> list[To
 
 
 def build_mock_toolset(tool_responses: dict[str, list[dict[str, Any]]]) -> Toolset:
-    """构建一个包含所有 Mock 工具的 Toolset。"""
+    """将 :func:`build_mock_tools` 的结果包装成名为 ``mock`` 的工具集。"""
 
     tools = build_mock_tools(tool_responses)
     return Toolset(

@@ -18,7 +18,11 @@ _jinja_env = Environment(loader=BaseLoader())
 
 
 def _load_env(env_path: Path | None = None) -> None:
-    """从 .env 文件加载配置到 os.environ（已存在的变量不覆盖）。"""
+    """从 ``.env`` 加载 ``key=value`` 配置到 ``os.environ``。
+
+    ``env_path`` 为空时默认读取仓库根目录的 ``.env``；空行和 ``#`` 注释会
+    跳过，且不会覆盖进程启动前已经设置的同名环境变量。
+    """
 
     path = env_path or Path(__file__).parent.parent / ".env"
     if not path.exists():
@@ -36,7 +40,11 @@ def _load_env(env_path: Path | None = None) -> None:
 
 
 def _render_prompt(template_name: str, variables: dict[str, Any]) -> str:
-    """渲染 eval/prompts/ 下的 Jinja 模板。"""
+    """渲染 ``eval/prompts/`` 下的 Jinja 模板。
+
+    ``template_name`` 是相对于 prompt 目录的文件名；``variables`` 的键名必须
+    与模板中的变量一致，例如 ``answer``、``ground_truth`` 和 ``tool_calls``。
+    """
 
     path = _PROMPT_DIR / template_name
     template_str = path.read_text(encoding="utf-8")
@@ -53,11 +61,12 @@ class Judge:
     """
 
     def __init__(self, env_path: Path | None = None) -> None:
+        # 先加载 .env，再读取环境变量；这样已存在的环境变量天然拥有更高优先级。
         _load_env(env_path)
 
-        self.model = os.environ.get("model_name", "")
-        self.api_key = os.environ.get("api_key", "")
-        self.api_base = os.environ.get("base_url", "")
+        self.model = os.environ.get("model_name", "")  # LiteLLM 的模型名或注册表键。
+        self.api_key = os.environ.get("api_key", "")  # 上游模型服务的认证密钥。
+        self.api_base = os.environ.get("base_url", "")  # OpenAI 兼容接口的基础 URL。
 
         if not self.model:
             raise ValueError(
@@ -77,6 +86,13 @@ class Judge:
         """使用 Judge Prompt 评分，返回解析后的 JSON 结果。
 
         调用失败时重试 ``retries`` 次；全部失败返回全零分并附带错误信息。
+
+        参数字段含义：
+        - ``answer``：Agent 最终面向用户的诊断报告。
+        - ``ground_truth``：场景 YAML 中的真实根因、关键信号和错误结论。
+        - ``scratchpad``：Agent 调查过程中记录的 findings/hypotheses 等状态。
+        - ``tool_calls``：工具调用名称及参数列表，用于判断证据链和效率。
+        - ``iterations``：Engine 实际迭代次数；``converged`` 表示是否因步数上限被迫结束。
         """
 
         prompt = _render_prompt(
@@ -99,8 +115,8 @@ class Judge:
         for attempt in range(retries):
             try:
                 kwargs: dict[str, Any] = {
-                    "model": self.model,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "model": self.model,  # 待调用的 Judge 模型。
+                    "messages": [{"role": "user", "content": prompt}],  # 单轮评分提示词。
                 }
                 if self.api_key:
                     kwargs["api_key"] = self.api_key
@@ -139,13 +155,14 @@ class Judge:
                 return self._empty_result(f"Judge 返回无法解析的内容: {cleaned[:200]}")
 
         # 归一化结构，确保下游始终拿到一致的字段。
+        # 只暴露约定的三个维度，避免模型额外输出的字段污染下游计算。
         normalized: dict[str, Any] = {}
         for key in ("root_cause_accuracy", "reasoning_quality", "report_usefulness"):
             entry = result.get(key, {})
             if isinstance(entry, dict):
                 normalized[key] = {
-                    "evidence": entry.get("evidence", ""),
-                    "score": int(entry.get("score", 0)),
+                    "evidence": entry.get("evidence", ""),  # Judge 对该分数的文字依据。
+                    "score": int(entry.get("score", 0)),  # 约定为 0-5 的整数分。
                 }
             else:
                 normalized[key] = {"evidence": "", "score": 0}
@@ -153,7 +170,11 @@ class Judge:
 
     @staticmethod
     def _empty_result(error: str) -> dict[str, Any]:
-        """生成全零分的降级结果。"""
+        """生成全零分的降级结果。
+
+        三个维度都保留统一的 ``evidence``/``score`` 字段，其中 ``evidence``
+        记录失败原因，方便报告使用者区分“确实得 0 分”和“Judge 调用失败”。
+        """
 
         return {
             "root_cause_accuracy": {"evidence": error, "score": 0},

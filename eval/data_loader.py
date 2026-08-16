@@ -13,24 +13,41 @@ import pandas as pd
 
 @dataclass
 class CaseInfo:
-    data_path: str
-    service: str
-    fault: str
-    case_id: str
+    """RCAEval 目录中一个故障样本的定位信息。
+
+    数据集通常按 ``<service>_<fault>/<case_id>/data.csv`` 组织；这些字段
+    是从路径推导出的标签，不是从 CSV 内容猜测出来的。
+    """
+
+    data_path: str  # ``data.csv`` 的完整路径。
+    service: str  # 注入故障的目标服务，例如 ``frontend``。
+    fault: str  # 故障类型，例如 ``cpu``、``mem`` 或 ``delay``。
+    case_id: str  # 当前实验用例目录名，用于在报告中唯一标识样本。
 
 
 @dataclass
 class CaseSummary:
-    case: CaseInfo
-    inject_time: int
-    services: list[str]
-    metric_table: str
-    normal_rows: int
-    anomal_rows: int
-    total_columns: int
+    """供提示词使用的时序数据摘要。
+
+    该对象把长 CSV 转换成有限大小的统计表，避免把全部采样点直接发送给
+    LLM，同时保留评测所需的时间窗口和服务标签。
+    """
+
+    case: CaseInfo  # 原始 case 的路径及真实故障标签。
+    inject_time: int  # 故障注入时刻；与 CSV ``time`` 列使用同一时间单位。
+    services: list[str]  # 从指标列名前缀提取出的去重服务名，保持首次出现顺序。
+    metric_table: str  # 按变化幅度排序后的可读统计表，作为提示词正文。
+    normal_rows: int  # 注入前窗口实际保留的采样行数。
+    anomal_rows: int  # 注入后窗口实际保留的采样行数。
+    total_columns: int  # 去掉 ``time`` 后的指标列数量。
 
 
 def discover_cases(data_dir: str) -> list[CaseInfo]:
+    """递归发现所有包含 ``data.csv`` 的 case 目录。
+
+    路径的上两级目录必须能按第一个下划线拆成 ``service`` 和 ``fault``；
+    不符合约定的目录会被静默跳过，以兼容数据集中的辅助文件。
+    """
     pattern = os.path.join(data_dir, "**", "data.csv")
     paths = sorted(glob.glob(pattern, recursive=True))
     cases: list[CaseInfo] = []
@@ -45,6 +62,12 @@ def discover_cases(data_dir: str) -> list[CaseInfo]:
 
 
 def load_and_summarize(case: CaseInfo, length_minutes: int = 20) -> CaseSummary:
+    """读取一个 case，并生成正常/异常窗口的逐指标统计摘要。
+
+    ``length_minutes`` 表示总窗口长度：函数将它平均分配给注入前和注入后
+    两段（每段 ``length_minutes * 60 / 2`` 个时间单位），分别计算均值、标准差
+    和相对变化率，再只保留变化最大的 40 个指标用于展示。
+    """
     df = pd.read_csv(case.data_path)
 
     inject_time_path = os.path.join(os.path.dirname(case.data_path), "inject_time.txt")
@@ -53,7 +76,7 @@ def load_and_summarize(case: CaseInfo, length_minutes: int = 20) -> CaseSummary:
 
     df = df.replace([np.inf, -np.inf], np.nan).ffill().fillna(0)
 
-    # Drop duplicate 'time' column if present (RE1-OB has two)
+    # Drop duplicate column if present (RE1-OB has two)
     cols = list(df.columns)
     seen = set()
     keep = []
@@ -62,9 +85,9 @@ def load_and_summarize(case: CaseInfo, length_minutes: int = 20) -> CaseSummary:
             continue
         seen.add(c)
         keep.append(c)
-    df = df[keep]
+    df = df[keep] # 根据标签列表去索引DataFrame，返回一个只包含指定列的新DataFrame
 
-    # Window: take length_minutes of normal + anomalous data
+    # 窗口总长度由调用方控制，并平均分成“正常”和“异常”两半。
     window = length_minutes * 60 // 2
     normal_df = df[df["time"] < inject_time].tail(window)
     anomal_df = df[df["time"] >= inject_time].head(window)
@@ -75,7 +98,7 @@ def load_and_summarize(case: CaseInfo, length_minutes: int = 20) -> CaseSummary:
     # Extract unique service names from columns
     services = _extract_services(metric_cols)
 
-    # Compute per-metric statistics
+    # 对每个指标分别计算两段窗口的水平变化和波动变化。
     records = []
     for col in metric_cols:
         n_vals = normal_df[col] if col in normal_df.columns else pd.Series(dtype=float)
@@ -99,14 +122,14 @@ def load_and_summarize(case: CaseInfo, length_minutes: int = 20) -> CaseSummary:
             std_change = 0.0
 
         records.append({
-            "metric": col,
-            "service": _extract_service(col),
-            "normal_mean": n_mean,
-            "anomal_mean": a_mean,
-            "change_ratio": change_ratio,
-            "normal_std": n_std,
-            "anomal_std": a_std,
-            "std_change": std_change,
+            "metric": col,  # 原始指标列名，通常包含服务和指标类型。
+            "service": _extract_service(col),  # 指标所属服务。
+            "normal_mean": n_mean,  # 注入前窗口均值。
+            "anomal_mean": a_mean,  # 注入后窗口均值。
+            "change_ratio": change_ratio,  # 均值相对变化：(异常-正常)/|正常|。
+            "normal_std": n_std,  # 注入前窗口标准差。
+            "anomal_std": a_std,  # 注入后窗口标准差。
+            "std_change": std_change,  # 标准差相对变化：(异常-正常)/正常。
         })
 
     # Sort by absolute change ratio, take top 40
