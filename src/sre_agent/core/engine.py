@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from sre_agent.core.context_manager import BudgetStatus, ContextManager
+from sre_agent.core.context_manager import RECALL_MARKER, BudgetStatus, ContextManager
 from sre_agent.core.llm import LLM
 from sre_agent.core.memory_store import InvestigationSummary, MemoryStore
 from sre_agent.core.tool import Tool
@@ -222,7 +222,7 @@ class Engine:
                 messages.append(tr)
                 # 记录被压缩并落盘的工具调用 ID，供记忆存档引用。
                 content = tr.get("content", "")
-                if isinstance(content, str) and "call_id=" in content:
+                if isinstance(content, str) and RECALL_MARKER in content:
                     evidence_call_ids.append(tr.get("tool_call_id", ""))
 
             iteration += 1
@@ -279,6 +279,7 @@ class Engine:
         return {
             "tool_call_id": tc["id"],
             "role": "tool",
+            "name": name,
             "content": _format_result_for_llm(result),
         }
 

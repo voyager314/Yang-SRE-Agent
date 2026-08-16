@@ -13,6 +13,10 @@ from .tool import Toolset
 _IMMEDIATE_CHAR_THRESHOLD = 16_000  # 按每个 token 约四个字符估算，约为 4K token。
 _RECENT_CALLS_TO_KEEP = 5
 
+# 压缩摘要末尾的回取提示前缀。引擎据此判断某条工具结果是否已落盘，
+# 因此必须足够特异——工具输出中出现裸的 "call_id=" 并不罕见。
+RECALL_MARKER = "[原始输出已存储，call_id="
+
 
 class BudgetStatus(StrEnum):
     NORMAL = "normal"
@@ -80,7 +84,7 @@ class ContextManager:
         else:
             compressed = _default_compress(raw_output)
 
-        recall_hint = f"\n[原始输出已存储，call_id={call_id}，可用 recall_evidence 获取完整内容]"
+        recall_hint = f"\n{RECALL_MARKER}{call_id}，可用 recall_evidence 获取完整内容]"
         return compressed + recall_hint
 
     # ------------------------------------------------------------------
@@ -100,9 +104,14 @@ class ContextManager:
             if msg.get("role") == "tool" and i not in recent_set:
                 content = msg.get("content", "")
                 if isinstance(content, str) and len(content) > _IMMEDIATE_CHAR_THRESHOLD:
-                    call_id = msg.get("tool_call_id", f"batch_{i}")
-                    tool_name = msg.get("name", "")
-                    compressed = self.compress_immediate(call_id, tool_name, content)
+                    if RECALL_MARKER in content:
+                        # 已是摘要，原文早已落盘。此处只做通用折叠，绝不能再次调用
+                        # compress_immediate——那会用摘要覆盖证据库中同 call_id 的原始输出。
+                        compressed = _default_compress(content)
+                    else:
+                        call_id = msg.get("tool_call_id", f"batch_{i}")
+                        tool_name = msg.get("name", "")
+                        compressed = self.compress_immediate(call_id, tool_name, content)
                     result.append({**msg, "content": compressed})
                     continue
             result.append(msg)

@@ -87,6 +87,8 @@ class ToolExecutor:
                     {
                         "tool_call_id": call["id"],
                         "role": "tool",
+                        # 保留工具名，供上下文管理器按工具集选择压缩策略。
+                        "name": call["function"]["name"],
                         "content": _format_result_for_llm(result),
                     }
                 )

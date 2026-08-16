@@ -113,6 +113,34 @@ class TestToolExecutor:
         result = executor.execute("nonexistent", {})
         assert result.status == ToolResultStatus.ERROR
 
+    def test_parallel_results_carry_tool_name(self):
+        class EchoTool(Tool):
+            def _invoke(self, params):
+                return StructuredToolResult(
+                    status=ToolResultStatus.SUCCESS,
+                    data=params.get("msg", ""),
+                )
+
+        executor = ToolExecutor()
+        executor.register(
+            EchoTool(
+                name="echo",
+                description="echo",
+                parameters={"type": "object", "properties": {"msg": {"type": "string"}}},
+            )
+        )
+        results = executor.execute_parallel(
+            [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "echo", "arguments": '{"msg": "hi"}'},
+                }
+            ]
+        )
+        # 工具名必须随消息一起返回，批量压缩据此选择工具集的压缩策略。
+        assert results[0]["name"] == "echo"
+
 
 class TestEngine:
     def test_call_no_tools(self):
@@ -528,6 +556,48 @@ class TestContextManager:
         result = cm.compress_batch(messages)
         assert result[0]["content"] == big
         assert result[1]["content"] == big
+
+    def test_compress_batch_routes_by_tool_name(self, tmp_path):
+        from sre_agent.core.tool import Toolset
+
+        class MarkerToolset(Toolset):
+            def compress(self, tool_name: str, raw_output: str) -> str:
+                return f"[{tool_name} 领域摘要]"
+
+        cm = self._make_cm(used=0, window=100_000, tmp_path=tmp_path)
+        cm.toolsets = {"loki_query": MarkerToolset(name="logs", tools=[])}
+
+        big = "\n".join(f"{'x' * 50} line {i}" for i in range(400))
+        messages = [
+            {"role": "tool", "tool_call_id": f"c{i}", "name": "loki_query", "content": big}
+            for i in range(8)
+        ]
+        result = cm.compress_batch(messages)
+        # 消息携带 name 后，批量压缩必须走工具集的领域压缩而非通用折叠。
+        assert result[0]["content"].startswith("[loki_query 领域摘要]")
+
+    def test_compress_batch_does_not_overwrite_evidence(self, tmp_path):
+        from sre_agent.core.context_manager import RECALL_MARKER
+
+        cm = self._make_cm(used=0, window=100_000, tmp_path=tmp_path)
+
+        # 构造一条即时压缩后仍超过阈值的摘要，使批量压缩会再次处理它。
+        raw = "\n".join(f"{'y' * 1000} line {i}" for i in range(200))
+        compressed = cm.compress_immediate("c0", "", raw)
+        assert len(compressed) > 16_000, "前置条件：摘要本身仍需超过阈值"
+        assert cm.evidence_store.load("c0") == raw
+
+        messages = [{"role": "tool", "tool_call_id": "c0", "content": compressed}]
+        messages += [
+            {"role": "tool", "tool_call_id": f"c{i}", "content": "short"} for i in range(1, 6)
+        ]
+        result = cm.compress_batch(messages)
+
+        # 证据库中必须仍是原始输出，不能被摘要覆盖。
+        assert cm.evidence_store.load("c0") == raw
+        # 摘要仍被进一步折叠，且回取提示保留。
+        assert len(result[0]["content"]) < len(compressed)
+        assert RECALL_MARKER in result[0]["content"]
 
 
 class TestBuiltinTools:
