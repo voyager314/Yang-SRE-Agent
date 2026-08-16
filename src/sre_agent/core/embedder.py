@@ -20,6 +20,16 @@ class Embedder(ABC):
 
         ...
 
+    @property
+    def model_id(self) -> str:
+        """标识当前嵌入模型的字符串，供 MemoryStore 判断已建索引是否仍然可用。
+
+        向量只在同一模型下可比，模型一变旧索引就必须整体重建。默认返回实现类名，
+        具体实现应覆盖为真正的模型标识。
+        """
+
+        return type(self).__name__
+
 
 class SentenceTransformerEmbedder(Embedder):
     """通过 sentence-transformers 加载本地模型生成嵌入向量。
@@ -31,6 +41,12 @@ class SentenceTransformerEmbedder(Embedder):
     def __init__(self, model_name: str = "Alibaba-NLP/gte-Qwen2-1.5B-instruct") -> None:
         self._model_name = model_name
         self._model: object | None = None
+
+    @property
+    def model_id(self) -> str:
+        """返回 HuggingFace 模型标识，索引元数据据此判断是否需要重建。"""
+
+        return self._model_name
 
     def _load_model(self) -> None:
         """加载 sentence-transformers 模型，首次运行时自动从 HuggingFace 下载。"""

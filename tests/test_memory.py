@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -28,8 +29,13 @@ from sre_agent.core.tool_executor import ToolExecutor
 class _FakeEmbedder(Embedder):
     """返回固定维度零向量的测试用 Embedder。"""
 
-    def __init__(self, dim: int = 1536) -> None:
+    def __init__(self, dim: int = 1536, model_id: str = "fake-embedder") -> None:
         self._dim = dim
+        self._model_id = model_id
+
+    @property
+    def model_id(self) -> str:
+        return self._model_id
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         return [[0.0] * self._dim for _ in texts]
@@ -261,8 +267,6 @@ class TestMemoryStoreSave:
 
     def test_index_failure_keeps_archive(self, tmp_path: Path, caplog) -> None:
         """索引写入失败时归档必须已经落盘，且失败不能被静默吞掉。"""
-        import logging
-
         store, _ = self._make_store(tmp_path)
         store._collection = MagicMock()
         store._collection.upsert.side_effect = RuntimeError("chroma down")
@@ -462,10 +466,122 @@ class TestMemoryStoreRecall:
 
 
 # ---------------------------------------------------------------------------
-# 8.5 Engine + MemoryStore 集成测试
+# 8.5 MemoryStore.reindex 与索引一致性测试
 # ---------------------------------------------------------------------------
 
 
+class TestMemoryStoreReindex:
+    def _make_store(self, tmp_path: Path, model_id: str = "fake-embedder") -> MemoryStore:
+        mock_llm = MagicMock(spec=DefaultLLM)
+        mock_llm.completion.return_value = ModelResponse(
+            content=json.dumps(
+                {
+                    "conclusion": "OOM due to leak",
+                    "root_cause": "unclosed connections",
+                    "resolution": "fix pool",
+                    "key_evidence": ["heap grew"],
+                    "tags": ["oom"],
+                }
+            ),
+        )
+        return MemoryStore(
+            embedder=_FakeEmbedder(model_id=model_id),
+            llm=mock_llm,
+            memory_dir=tmp_path / "memory",
+            score_threshold=0.0,
+        )
+
+    def _save(self, store: MemoryStore, question: str) -> InvestigationSummary:
+        result = store.save_investigation(
+            question=question,
+            answer="answer",
+            scratchpad=Scratchpad(),
+            tool_calls=[],
+            evidence_refs=[],
+        )
+        assert result is not None
+        return result
+
+    def _meta(self, tmp_path: Path) -> dict:
+        path = tmp_path / "memory" / "index_meta.json"
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def test_fresh_dir_records_embedding_model(self, tmp_path: Path) -> None:
+        self._make_store(tmp_path, model_id="model-a")
+        assert self._meta(tmp_path)["embedding_model"] == "model-a"
+
+    def test_reindex_rebuilds_from_archive(self, tmp_path: Path) -> None:
+        store = self._make_store(tmp_path)
+        self._save(store, "pod OOM")
+        self._save(store, "node NotReady")
+
+        store._client.delete_collection(name="sre_investigations")
+        store._collection = store._client.get_or_create_collection(
+            name="sre_investigations",
+            embedding_function=None,
+        )
+        assert store._collection.count() == 0
+
+        assert store.reindex() == 2
+        assert store._collection.count() == 2
+        assert len(store.recall("OOM")) >= 1
+
+    def test_reindex_drops_entries_missing_from_archive(self, tmp_path: Path) -> None:
+        store = self._make_store(tmp_path)
+        saved = self._save(store, "pod OOM")
+
+        (tmp_path / "memory" / "investigations" / f"{saved.id}.json").unlink()
+
+        # 归档是真相源：归档里没有的条目重建后不应保留。
+        assert store.reindex() == 0
+        assert store._collection.count() == 0
+
+    def test_reindex_skips_corrupt_archive(self, tmp_path: Path) -> None:
+        store = self._make_store(tmp_path)
+        self._save(store, "pod OOM")
+        (tmp_path / "memory" / "investigations" / "broken.json").write_text(
+            "{not json", encoding="utf-8"
+        )
+
+        # 单个坏文件只跳过，不应毁掉整次重建。
+        assert store.reindex() == 1
+
+    def test_model_change_triggers_reindex(self, tmp_path: Path) -> None:
+        store_a = self._make_store(tmp_path, model_id="model-a")
+        self._save(store_a, "pod OOM")
+        assert self._meta(tmp_path)["embedding_model"] == "model-a"
+
+        # 换 embedding 模型后重新构造，旧向量不可用，应自动用归档重建。
+        store_b = self._make_store(tmp_path, model_id="model-b")
+        assert self._meta(tmp_path)["embedding_model"] == "model-b"
+        assert store_b._collection.count() == 1
+        assert len(store_b.recall("OOM")) == 1
+
+    def test_lost_index_rebuilt_on_construction(self, tmp_path: Path) -> None:
+        store = self._make_store(tmp_path)
+        self._save(store, "pod OOM")
+
+        # 模拟 chroma 目录丢失：归档还在，索引空了。
+        store._client.delete_collection(name="sre_investigations")
+
+        store2 = self._make_store(tmp_path)
+        assert store2._collection.count() == 1
+
+    def test_matching_index_not_rebuilt(self, tmp_path: Path, caplog) -> None:
+        store = self._make_store(tmp_path)
+        self._save(store, "pod OOM")
+
+        # 模型与条数都一致时构造不应触发重建——否则每次启动都会白白重算一遍向量。
+        with caplog.at_level(logging.INFO, logger="sre_agent.core.memory_store"):
+            store2 = self._make_store(tmp_path)
+
+        assert store2._collection.count() == 1
+        assert "重建索引" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# 8.6 Engine + MemoryStore 集成测试
+# ---------------------------------------------------------------------------
 class TestEngineMemoryIntegration:
     def _make_llm(self, answer: str = "done") -> MagicMock:
         mock_llm = MagicMock(spec=DefaultLLM)

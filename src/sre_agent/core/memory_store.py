@@ -18,6 +18,9 @@ from sre_agent.utils.jinja import load_prompt
 
 logger = logging.getLogger(__name__)
 
+_COLLECTION_NAME = "sre_investigations"
+_INDEX_META_FILE = "index_meta.json"
+
 
 class InvestigationSummary(BaseModel):
     """一次完整调查的结构化档案，作为长期记忆的基本单元。"""
@@ -80,7 +83,8 @@ class MemoryStore:
     """协调 Embedder、LLM 和 ChromaDB，实现调查摘要的提取、持久化与语义检索。
 
     双写策略：每条 InvestigationSummary 同时写入 ChromaDB（用于检索）和
-    JSON 文件（无损归档）。ChromaDB 是索引层，JSON 是真相源。
+    JSON 文件（无损归档）。ChromaDB 是索引层，JSON 是真相源——索引是纯派生数据，
+    任何时候都能由 :meth:`reindex` 从归档重建，构造时也会自动校验并按需重建。
     """
 
     def __init__(
@@ -101,15 +105,18 @@ class MemoryStore:
         self._memory_dir = Path(memory_dir)
         self._chroma_dir = self._memory_dir / "chroma"
         self._archive_dir = self._memory_dir / "investigations"
+        self._meta_path = self._memory_dir / _INDEX_META_FILE
 
         self._chroma_dir.mkdir(parents=True, exist_ok=True)
         self._archive_dir.mkdir(parents=True, exist_ok=True)
 
         self._client = chromadb.PersistentClient(path=str(self._chroma_dir))
         self._collection = self._client.get_or_create_collection(
-            name="sre_investigations",
+            name=_COLLECTION_NAME,
             embedding_function=None,
         )
+
+        self._ensure_index_current()
 
     def save_investigation(
         self,
@@ -177,6 +184,112 @@ class MemoryStore:
         except Exception:
             logger.warning("调查记忆检索失败，跳过历史注入", exc_info=True)
             return []
+
+    def reindex(self) -> int:
+        """丢弃现有索引，用 JSON 归档重新 embed 并写回 ChromaDB，返回重建的条目数。
+
+        索引是纯派生数据，重建一律以归档为准：归档里没有的条目会被清掉——它们本就
+        读不回完整内容，换模型后向量也已失效。解析失败的单个归档只跳过并告警，
+        不让一条坏文件毁掉整次重建。
+        """
+
+        summaries: list[InvestigationSummary] = []
+        for path in sorted(self._archive_dir.glob("*.json")):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                summaries.append(InvestigationSummary(**data))
+            except Exception:
+                logger.warning("归档 %s 解析失败，重建索引时跳过", path.name, exc_info=True)
+
+        # 整体删除重建而非逐条 upsert：换模型后维度可能改变，向已有集合写入不同
+        # 维度的向量会直接报错，且旧集合里的残留条目也需要一并清掉。
+        self._client.delete_collection(name=_COLLECTION_NAME)
+        self._collection = self._client.get_or_create_collection(
+            name=_COLLECTION_NAME,
+            embedding_function=None,
+        )
+
+        if summaries:
+            texts = [s.to_embedding_text() for s in summaries]
+            # 一次性批量 embed，避免按条反复调用模型。
+            embeddings = self._embedder.embed(texts)
+            self._collection.upsert(
+                ids=[s.id for s in summaries],
+                embeddings=embeddings,  # type: ignore[arg-type]
+                documents=texts,
+                metadatas=[s.to_chroma_metadata() for s in summaries],
+            )
+
+        self._write_index_meta()
+        return len(summaries)
+
+    def _ensure_index_current(self) -> None:
+        """校验索引与归档是否仍然一致，不一致则重建。
+
+        两种失效场景都是静默的，所以必须在构造时主动查：
+        1. 换了 embedding 模型——向量只在同一模型下可比。维度不同会让 upsert 和
+           query 直接抛异常，被 save/recall 的兜底 except 吞成"没有记忆"；维度恰好
+           相同则更隐蔽，不报错但相似度退化成噪声，再被阈值滤掉。
+        2. 索引与归档条数对不上——chroma 目录被删、或某次 upsert 失败只留下了归档。
+
+        重建失败不抛出：记忆检索属于增强功能，索引出问题不该阻断 MemoryStore 的
+        构造，更不该阻断调查流程。
+        """
+
+        try:
+            self._check_and_rebuild_index()
+        except Exception:
+            logger.warning("索引校验或重建失败，历史记忆本次可能无法被检索到", exc_info=True)
+
+    def _check_and_rebuild_index(self) -> None:
+        """_ensure_index_current 的实际逻辑，异常由调用方统一兜底。"""
+
+        recorded = self._read_index_meta()
+        current = self._embedder.model_id
+        archive_count = sum(1 for _ in self._archive_dir.glob("*.json"))
+        indexed_count = self._collection.count()
+
+        if recorded == current and archive_count == indexed_count:
+            return
+
+        if recorded is None and archive_count == 0 and indexed_count == 0:
+            # 全新的 memory 目录，没有可重建的内容，记下模型标识即可。
+            self._write_index_meta()
+            return
+
+        if recorded != current:
+            reason = (
+                f"索引所用 embedding 模型未知（{_INDEX_META_FILE} 缺失或损坏）"
+                if recorded is None
+                else f"embedding 模型已由 {recorded} 变为 {current}"
+            )
+        else:
+            reason = f"索引与归档不一致（归档 {archive_count} 条，索引 {indexed_count} 条）"
+
+        logger.info("%s，正在用 JSON 归档重建索引", reason)
+        rebuilt = self.reindex()
+        logger.info("索引重建完成，共 %d 条记忆", rebuilt)
+
+    def _read_index_meta(self) -> str | None:
+        """读取建索引时使用的 embedding 模型标识；文件缺失或损坏时返回 None。"""
+
+        if not self._meta_path.exists():
+            return None
+        try:
+            data = json.loads(self._meta_path.read_text(encoding="utf-8"))
+            model = data.get("embedding_model")
+        except Exception:
+            # 元数据损坏按"来源未知"处理，触发一次重建即可自愈。
+            return None
+        return model if isinstance(model, str) else None
+
+    def _write_index_meta(self) -> None:
+        """记录当前索引由哪个 embedding 模型建成。"""
+
+        self._meta_path.write_text(
+            json.dumps({"embedding_model": self._embedder.model_id}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     def _extract_summary(
         self,
@@ -272,8 +385,7 @@ class MemoryStore:
                 metadatas=[summary.to_chroma_metadata()],
             )
         except Exception:
-            # 归档已落盘，这条记忆不会丢，只是检索不到。显式告警而不是让调用方
-            # 以为整条链路都成功了。
+            # 归档已落盘，这条记忆不会丢，只是检索不到。显式告警而不是让调用方，以为整条链路都成功了。
             logger.warning(
                 "调查 %s 已归档但索引写入失败，该条记忆无法被 recall 检索到",
                 summary.id,
