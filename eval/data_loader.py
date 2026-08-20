@@ -71,7 +71,7 @@ def load_and_summarize(case: CaseInfo, length_minutes: int = 20) -> CaseSummary:
     df = pd.read_csv(case.data_path)
 
     inject_time_path = os.path.join(os.path.dirname(case.data_path), "inject_time.txt")
-    with open(inject_time_path) as f:
+    with open(inject_time_path, encoding="utf-8") as f:
         inject_time = int(f.readline().strip())
 
     df = df.replace([np.inf, -np.inf], np.nan).ffill().fillna(0)

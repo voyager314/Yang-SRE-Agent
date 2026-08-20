@@ -76,7 +76,7 @@ class ToolsetManager:
     def _parse_yaml_toolset(self, path: Path) -> Toolset | None:
         """解析单个 YAML 文件；空文件不会生成无意义工具集。"""
 
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
         if not data:
             return None

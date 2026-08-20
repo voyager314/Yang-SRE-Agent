@@ -74,7 +74,7 @@ class Config(BaseSettings):
         if isinstance(config_path, str):
             config_path = Path(config_path)
         if config_path.exists():
-            with open(config_path) as f:
+            with open(config_path, encoding="utf-8") as f:
                 file_data = yaml.safe_load(f) or {}
             # 构造参数或环境变量已提供的值不得被 YAML 覆盖。
             for key, val in file_data.items():
@@ -90,7 +90,7 @@ class Config(BaseSettings):
 
         registry: dict[str, ModelEntry] = {}
         if DEFAULT_MODELS_FILE.exists():
-            with open(DEFAULT_MODELS_FILE) as f:
+            with open(DEFAULT_MODELS_FILE, encoding="utf-8") as f:
                 raw = yaml.safe_load(f) or {}
             for name, entry_data in raw.items():
                 if isinstance(entry_data, dict):

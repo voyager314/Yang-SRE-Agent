@@ -17,7 +17,7 @@ NETWORK_YAML = Path(__file__).resolve().parent.parent / "src" / "sre_agent" / "t
 @pytest.fixture
 def network_tools():
     # 直接走生产 YAML 解析路径，确保测试覆盖声明内容到 YAMLTool 的真实映射。
-    with open(NETWORK_YAML) as f:
+    with open(NETWORK_YAML, encoding="utf-8") as f:
         data = yaml.safe_load(f)
     manager = ToolsetManager()
     tools = manager._parse_tools(data.get("tools", []))
