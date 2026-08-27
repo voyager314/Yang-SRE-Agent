@@ -1,5 +1,5 @@
 [project]
-name = "sre-agent"
+name = "yang-sre-agent"
 version = "0.1.0"
 description = "AI-powered SRE agent for infrastructure diagnostics"
 readme = "README.md"
@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [project.scripts]
-sre-agent = "sre_agent:main"
+yang-sre-agent = "sre_agent:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -29,6 +29,20 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sre_agent"]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "tests",
+    "eval",
+    "openspec",
+    "testbed",
+    "temp",
+    "compression_policy.md",
+    ".github",
+    ".claude",
+    ".codex",
+    ".venv",
+]
 
 [tool.ruff]
 target-version = "py313"

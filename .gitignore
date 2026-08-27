@@ -9,3 +9,4 @@ compression_policy.md
 .env
 eval/results/
 testbed/
+dist/
